@@ -1,4 +1,4 @@
-# SwampDS Web Dashboard
+# SwampDS Web Dashboard B-Nexus
 
 A React-based web dashboard for monitoring the Swamp Drainage System (SwampDS). This application provides a user-friendly interface to track real-time sensor data, pump statuses, and historical analytics.
 
