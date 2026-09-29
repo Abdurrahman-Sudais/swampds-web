@@ -1,6 +1,7 @@
 import React from 'react';
 import { useSwampdsData, useChartHistory, sendPumpCommand, setControlMode } from '../data/swampdsData';
 import { useAuth } from '../auth/AuthContext';
+import { flowSensorStatus } from '../data/flowStatus';
 
 import SystemStatusBanner  from '../components/dashboard/SystemStatusBanner';
 import WaterLevelCard      from '../components/dashboard/WaterLevelCard';
@@ -16,7 +17,7 @@ const FLOW_SENSORS = [
 ];
 
 export default function Dashboard() {
-  const { sensors, status, alerts } = useSwampdsData();
+  const { sensors, status, alerts, detection } = useSwampdsData();
   const { flowData, waterLevelData } = useChartHistory();
   const { canEdit } = useAuth();
 
@@ -34,7 +35,7 @@ export default function Dashboard() {
         <WaterLevelCard percent={sensors.waterLevelPercent} cm={sensors.waterLevelCm} />
 
         {FLOW_SENSORS.map(({ key, ...props }) => (
-          <FlowSensorCard key={key} value={sensors[key]} history={flowData} {...props} />
+          <FlowSensorCard key={key} value={sensors[key]} history={flowData} status={flowSensorStatus(key, sensors, detection)} {...props} />
         ))}
 
         <PumpControlCard

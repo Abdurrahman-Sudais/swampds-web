@@ -16,6 +16,12 @@
 
   Credentials live in secrets.h (git-ignored). Copy secrets.example.h to
   secrets.h in this folder and fill it in before compiling.
+
+  Build: ESP32 Arduino core 3.x, board "ESP32 Dev Module".
+  Libraries: "Firebase Arduino Client Library for ESP8266 and ESP32" (Mobizt),
+  "Adafruit SSD1306", "Adafruit GFX Library".
+  Tools > Partition Scheme > "Huge APP (3MB No OTA/1MB SPIFFS)": with the default
+  scheme this sketch fills ~97% of flash, so any addition will not fit.
 */
 
 #include <WiFi.h>
@@ -49,14 +55,18 @@ const uint8_t FLOW_PINS[2] = {32, 33};                  // flow1 = nearest the p
 #define RELAY_ACTIVE_HIGH true                          // many relay boards are active-LOW: set false
 
 // ======================= Tunables — keep in step with src/twin/config.js and PUMP_THRESHOLDS =======================
-const float DELIVERY_HEIGHT_CM   = 18.0;         // physical tank height
-const float SENSOR_TO_BOTTOM_CM  = 18.0;         // ultrasonic sensor to tank bottom — MEASURE this on the rig
+// Delivery tank geometry. Only the first three are measured; the rest follow from them.
+const float TANK_HEIGHT_CM       = 18.0;         // inside height of the tank
+const float SENSOR_DROP_CM       = 4.5;          // how far below the rim the ultrasonic sensor's face sits
+const float SENSOR_CLEARANCE_CM  = 3.0;          // HC-SR04 cannot measure closer than ~2 cm; +1 cm for ripples
+const float SENSOR_TO_BOTTOM_CM  = TANK_HEIGHT_CM - SENSOR_DROP_CM;            // 13.5 cm
+const float DELIVERY_HEIGHT_CM   = SENSOR_TO_BOTTOM_CM - SENSOR_CLEARANCE_CM;  // 10.5 cm = 100 % (highest safe level)
 const float FLOW_K[2]            = {7.5, 7.5};   // pulses/s per L/min — calibrate each sensor
 const float TOLERANCE_PCT        = 20.0;         // flow loss between flow1/flow2 that counts as a leak
 const uint32_t PERSIST_SEC       = 10;
 const float MIN_FLOW_LPM         = 0.5;
-const float PUMP_ON_BELOW_CM     = 2.0;          // auto: pump ON at or below this water depth
-const float PUMP_OFF_ABOVE_CM    = 13.0;         // auto: pump OFF at or above; leaves 5 cm below the sensor (HC-SR04 dead zone + ripple)
+const float PUMP_ON_BELOW_CM     = 2.0;                        // auto: pump ON at or below this water depth (19 %)
+const float PUMP_OFF_ABOVE_CM    = DELIVERY_HEIGHT_CM - 0.5;   // auto: pump OFF at 10 cm (95 %); 0.5 cm for water still in the pipe
 const float LOW_LEVEL_WARN_CM    = 1.0;          // warning below this depth (pump should have started at 2 cm)
 const uint32_t DRY_RUN_SEC       = 15;
 const float DRY_RUN_MIN_FLOW     = 0.3;

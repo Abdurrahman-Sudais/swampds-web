@@ -10,21 +10,22 @@
  */
 
 import { useState, useEffect } from 'react';
-import { getDatabase, ref, onValue, set, push } from 'firebase/database';
+import { getDatabase, ref, onValue, set, query, orderByKey, limitToLast } from 'firebase/database';
 import { app } from '../firebase/firebaseConfig';
+import { FULL_SCALE_CM, PUMP_ON_CM, PUMP_OFF_CM } from '../twin/config.js';
 
 const db = getDatabase(app);
 
 /**
- * Auto-pump thresholds used by the firmware (PUMP_ON_BELOW_CM / PUMP_OFF_ABOVE_CM in an 18 cm tank).
- * Display values only - the web app does not enforce them. `low` / `full` are the same levels in %.
+ * Auto-pump thresholds used by the firmware (PUMP_ON_BELOW_CM / PUMP_OFF_ABOVE_CM), shared with
+ * the twin. Display values only - the web app does not enforce them. `low` / `full` are the same
+ * levels in %, where 100 % is the highest level the sensor can safely measure (FULL_SCALE_CM).
  */
-const TANK_CM = 18;
 export const PUMP_THRESHOLDS = {
-  lowCm: 2,
-  fullCm: 13,
-  low:  Math.round((2 / TANK_CM) * 100),   // 11 %
-  full: Math.round((13 / TANK_CM) * 100),  // 72 %
+  lowCm:  PUMP_ON_CM,                                   // 2 cm
+  fullCm: PUMP_OFF_CM,                                  // 10 cm
+  low:    Math.round((PUMP_ON_CM / FULL_SCALE_CM) * 100),  // 19 %
+  full:   Math.round((PUMP_OFF_CM / FULL_SCALE_CM) * 100), // 95 %
 };
 
 // Live store (populated by Firebase onValue)
@@ -55,26 +56,28 @@ const _notify = (snapshot) => {
   _listeners.forEach(fn => fn(snapshot));
 };
 
-// Subscribe to the entire database root - updates push to all useSwampdsData() consumers
-onValue(ref(db, '/'), (snap) => {
-  const val = snap.val();
-  if (!val) return;
+// Live listeners. One per node rather than one on the database root: a root listener
+// re-reads and re-sorts the whole tree (every alert and pump-history row ever written)
+// on each 1-2 s sensor update, which gets slower the longer the system runs.
 
-  // Normalise alerts: Firebase stores objects with push-keys, convert to array
+const ALERTS_SHOWN = 10;
+const _raw = { sensors: null, system: null, status: null, control: null, twin: null, alerts: null };
+const _seen = new Set(); // nodes whose first snapshot has arrived
+
+function _rebuild() {
+  // Normalise alerts: Firebase stores objects with push-keys, convert to array (newest first)
   let alerts = [];
-  if (val.alerts) {
-    if (Array.isArray(val.alerts)) {
-      alerts = val.alerts;
-    } else {
-      alerts = Object.values(val.alerts)
-        .sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0))
-        .slice(0, 10);
-    }
+  if (_raw.alerts) {
+    alerts = Array.isArray(_raw.alerts)
+      ? _raw.alerts
+      : Object.values(_raw.alerts)
+          .sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0))
+          .slice(0, ALERTS_SHOWN);
   }
 
   // Map the backend structure and uppercase values to the frontend format
-  const backendStatus = val.status || {};
-  const backendSystem = val.system || {};
+  const backendStatus = _raw.status || {};
+  const backendSystem = _raw.system || {};
   const mappedStatus = {
     systemStatus:  backendSystem.status?.toLowerCase() ?? initialData.status.systemStatus,
     pumpStatus:    backendSystem.pumpState?.toLowerCase() ?? initialData.status.pumpStatus,
@@ -84,11 +87,11 @@ onValue(ref(db, '/'), (snap) => {
     pumpStartedAt: backendSystem.pumpStartedAt ?? null,
   };
 
-  const beat = val.sensors?.lastUpdated ?? null;
+  const beat = _raw.sensors?.lastUpdated ?? null;
   const prev = _store.meta ?? initialData.meta;
   const meta = {
-    source:      val.system?.source ?? null,
-    online:      val.system?.online ?? null,
+    source:      backendSystem.source ?? null,
+    online:      backendSystem.online ?? null,
     lastUpdated: beat,
     receivedAt:  beat === null
       ? null
@@ -96,39 +99,70 @@ onValue(ref(db, '/'), (snap) => {
   };
 
   _notify({
-    sensors: val.sensors ?? initialData.sensors,
+    sensors: _raw.sensors ?? initialData.sensors,
     status:  mappedStatus,
-    control: val.control ?? initialData.control,
+    control: _raw.control ?? initialData.control,
     alerts,
     detection: {
-      tolerancePct: Number.isFinite(val.twin?.tolerancePct) ? val.twin.tolerancePct : null,
-      persistSec:   Number.isFinite(val.twin?.persistSec)   ? val.twin.persistSec   : null,
+      tolerancePct: Number.isFinite(_raw.twin?.tolerancePct) ? _raw.twin.tolerancePct : null,
+      persistSec:   Number.isFinite(_raw.twin?.persistSec)   ? _raw.twin.persistSec   : null,
     },
-    loaded: true,
+    loaded: _seen.size > 0,
     meta,
   });
+}
 
-  if (val.sensors) _recordSample(val.sensors);
-});
+function _listen(key, source) {
+  onValue(source, (snap) => {
+    _raw[key] = snap.val();
+    _seen.add(key);
+    _rebuild();
+    if (key === 'sensors' && _raw.sensors) _recordSample(_raw.sensors);
+  });
+}
 
 // Chart history (recorded from the live stream)
 // Firebase only holds the latest sensor values, so trend data is built here:
 // one sample per SAMPLE_INTERVAL_MS, kept for 24 h, persisted in localStorage
 // so a page reload does not wipe the charts. Only records while the app is open.
+// The charts get a thinned copy (at most MAX_CHART_POINTS per line): a chart a few hundred
+// pixels wide cannot show 17k points, and drawing them all made every update slow.
 
 const HISTORY_KEY        = 'swampds.history.v1';
 const HISTORY_WINDOW_MS  = 24 * 60 * 60 * 1000;
-const SAMPLE_INTERVAL_MS = 5 * 1000; // 24h of history at this rate is ~17k points/line, still cheap to store and chart
+const SAMPLE_INTERVAL_MS = 5 * 1000; // 24h of history at this rate is ~17k points/line
+const MAX_CHART_POINTS   = 300;
+const SAVE_EVERY_MS      = 30 * 1000; // localStorage write rate (the full history is ~1 MB of JSON)
 
 // Includes seconds: below a 60s sample interval, several points in a row would otherwise
 // carry the identical "HH:MM" label, which reads as duplicate/simultaneous readings.
 const _timeLabel = (ts) =>
   new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-const _deriveCharts = (samples) => ({
-  flowData:       samples.map(s => ({ time: _timeLabel(s.ts), F1: s.f1, F2: s.f2 })),
-  waterLevelData: samples.map(s => ({ time: _timeLabel(s.ts), level: s.level })),
-});
+/**
+ * Keep the newest sample of each time bucket. Buckets are aligned to the clock (not to the
+ * array index), so existing points do not shift sideways every time a new sample arrives.
+ */
+export function thinSamples(samples, maxPoints = MAX_CHART_POINTS, stepMs = SAMPLE_INTERVAL_MS) {
+  if (samples.length <= maxPoints) return samples;
+  const span = samples[samples.length - 1].ts - samples[0].ts;
+  const bucketMs = Math.max(stepMs, Math.ceil(span / maxPoints / stepMs) * stepMs);
+  const out = [];
+  for (const s of samples) {
+    const bucket = Math.floor(s.ts / bucketMs);
+    if (out.length && Math.floor(out[out.length - 1].ts / bucketMs) === bucket) out[out.length - 1] = s;
+    else out.push(s);
+  }
+  return out;
+}
+
+const _deriveCharts = (samples) => {
+  const shown = thinSamples(samples).map(s => ({ ...s, time: _timeLabel(s.ts) }));
+  return {
+    flowData:       shown.map(s => ({ time: s.time, F1: s.f1, F2: s.f2 })),
+    waterLevelData: shown.map(s => ({ time: s.time, level: s.level })),
+  };
+};
 
 function _loadSamples() {
   try {
@@ -142,7 +176,19 @@ function _loadSamples() {
 
 let _samples = _loadSamples();
 let _charts  = _deriveCharts(_samples);
+let _lastSave = 0;
 const _chartListeners = new Set();
+
+function _save() {
+  _lastSave = Date.now();
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(_samples));
+  } catch {
+    // storage full or unavailable - charts still work for this session
+  }
+}
+// Keep the last (unsaved) samples when the tab closes
+if (typeof window !== 'undefined') window.addEventListener('pagehide', _save);
 
 function _recordSample(sensors) {
   const f1 = Number(sensors.flow1);
@@ -159,12 +205,12 @@ function _recordSample(sensors) {
   _charts  = _deriveCharts(_samples);
   _chartListeners.forEach(fn => fn(_charts));
 
-  try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(_samples));
-  } catch {
-    // storage full or unavailable - charts still work for this session
-  }
+  if (now - _lastSave >= SAVE_EVERY_MS) _save();
 }
+
+for (const key of ['sensors', 'system', 'status', 'control', 'twin']) _listen(key, ref(db, key));
+// Push keys sort by creation time, so the last N keys are the newest alerts (no index needed)
+_listen('alerts', query(ref(db, 'alerts'), orderByKey(), limitToLast(ALERTS_SHOWN)));
 
 // PUBLIC HOOKS & COMMANDS
 

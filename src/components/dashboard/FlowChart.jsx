@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  Legend, ReferenceLine, ResponsiveContainer,
+  Legend, ResponsiveContainer,
 } from 'recharts';
 import { Card, CardHeader } from '../Card';
 import ChartPlaceholder, { MIN_CHART_POINTS } from './ChartPlaceholder';
@@ -19,9 +19,10 @@ const LINES = [
 
 /**
  * @param {{ data: { time: string, F1: number, F2: number }[], noCard?: boolean, animate?: boolean }} props
- * Pass animate={false} for fast-updating data so lines don't re-animate on every sample.
+ * Animation is off by default: this chart shows live data, and re-animating the lines on every
+ * sample reads as lag. Memoised so live readings (every 1-2 s) don't redraw an unchanged chart.
  */
-export default function FlowChart({ data, noCard = false, animate = true }) {
+function FlowChart({ data, noCard = false, animate = false }) {
   const chartContent = data.length < MIN_CHART_POINTS ? (
     <ChartPlaceholder />
   ) : (
@@ -40,7 +41,7 @@ export default function FlowChart({ data, noCard = false, animate = true }) {
             axisLine={false}
             tickLine={false}
             tick={{ fill: '#94a3b8', fontSize: 11 }}
-            domain={[0, 7]}
+            domain={[0, 'auto']}
             tickFormatter={v => `${v}`}
           />
           <Tooltip
@@ -51,9 +52,6 @@ export default function FlowChart({ data, noCard = false, animate = true }) {
             iconType="circle"
             wrapperStyle={{ fontSize: '11px', paddingTop: '8px' }}
           />
-          {/* Normal operating band */}
-          <ReferenceLine y={5.3} stroke="#cbd5e1" strokeDasharray="4 2" />
-          <ReferenceLine y={4.4} stroke="#cbd5e1" strokeDasharray="4 2" />
           {LINES.map(({ key, name, color }) => (
             <Line
               key={key}
@@ -81,3 +79,5 @@ export default function FlowChart({ data, noCard = false, animate = true }) {
     </Card>
   );
 }
+
+export default React.memo(FlowChart);

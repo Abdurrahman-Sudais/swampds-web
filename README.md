@@ -49,7 +49,16 @@ Defined in [`src/twin/contract.js`](src/twin/contract.js). Real hardware should 
 
 [`swampds_prototype_2flow.ino`](swampds_prototype_2flow.ino) runs the ESP32 prototype. Before compiling, copy [`secrets.example.h`](secrets.example.h) to `secrets.h` in the same folder and fill in the Wi-Fi, Firebase and device-account values. `secrets.h` is git-ignored.
 
-The leak rule (20% of F1's flow missing at F2 for 10 s) and the pump thresholds (on at 2 cm, off at 13 cm, in an 18 cm tank) are set in the firmware and mirrored in [`src/twin/config.js`](src/twin/config.js) and `PUMP_THRESHOLDS` in [`src/data/swampdsData.js`](src/data/swampdsData.js). Change them in all three places together.
+Arduino IDE: the sketch must be in a folder named `swampds_prototype_2flow` (with `secrets.h` next to it). Board *ESP32 Dev Module* (ESP32 core 3.x); install the libraries *Firebase Arduino Client Library for ESP8266 and ESP32*, *Adafruit SSD1306* and *Adafruit GFX Library*; set **Tools → Partition Scheme → Huge APP**, because the sketch fills ~97% of flash with the default scheme.
+
+The leak rule (20% of F1's flow missing at F2 for 10 s) and the tank settings are set in the firmware and mirrored in [`src/twin/config.js`](src/twin/config.js), which the dashboard also reads. Change both together.
+
+Tank: 18 cm tall, the ultrasonic sensor sits 4.5 cm below the rim, and it needs ~3 cm of clearance, so the highest safe level is 10.5 cm (= 100%). Auto mode starts the pump at 2 cm (19%) and stops it at 10 cm (95%).
+
+Before first power-on with the pump connected, check:
+- **Relay polarity** (`RELAY_ACTIVE_HIGH`): with the pump unplugged, boot the board; the relay must stay off (LED off, no click). If it switches on, set it to `false`.
+- **Flow sensor K-factor** (`FLOW_K`, pulses per second per L/min): 7.5 is the YF-S201. Check it by running water into a measuring jug for 60 s and comparing with the reported L/min.
+- **Signal voltage**: the ESP32 inputs take 3.3 V. A 5 V HC-SR04 echo pin and 5 V flow-sensor outputs need a voltage divider (or 3.3 V-tolerant modules).
 
 ## Develop
 
@@ -99,16 +108,14 @@ view-only.
 
 - Realtime Database rules: reads may be public, but every write needs the signed-in
   account's `roles/<uid>` to be `"admin"` - `auth != null` alone is not enough once
-  roles are in use. `roles` itself is never writable from the client:
-  ```json
-  {
-    "rules": {
-      ".read": true,
-      "roles": { ".write": false },
-      ".write": "auth != null && root.child('roles').child(auth.uid).val() === 'admin'"
-    }
-  }
-  ```
+  roles are in use. The ESP32 signs in with its own account whose role is `"device"`; it
+  may write only the nodes the firmware publishes (it also resets `control/pumpCommand`
+  after a dry-run or leak stop). `roles` itself is never writable from the client.
+  The rules are in [`database.rules.json`](database.rules.json): paste its contents into
+  Firebase console → Realtime Database → **Rules** → Publish (or `firebase deploy --only database`).
+  (Write rules add up down the tree: admins keep full write access through the root rule, and
+  the per-node rules only add the device account.) Without the device entries the ESP32 signs in
+  but every write it makes is rejected with "Permission denied".
   Add a `roles/<uid>: "admin"` entry for every existing account before applying this -
   otherwise every account loses write access until you do.
 - Authentication → Settings → User actions: turn off **Enable create (sign-up)**; accounts are created manually in the console.

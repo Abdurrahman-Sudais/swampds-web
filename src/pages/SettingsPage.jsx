@@ -44,8 +44,9 @@ export default function SettingsPage() {
         <div className="flex items-start gap-2 p-3 mt-5 rounded-xl bg-slate-50 border border-slate-200 text-slate-600 text-xs sm:text-sm">
           <Info className="w-4 h-4 flex-shrink-0 mt-0.5" />
           <span>
-            These values are set in the device firmware (water depth in an 18 cm tank; the pump stops at
-            13 cm to keep water clear of the level sensor). This dashboard only displays them.
+            These values are set in the device firmware and shown as water depth. 100% is the highest
+            level the ultrasonic sensor can safely measure: the 18 cm tank minus the 4.5 cm the sensor
+            sits below the rim and 3 cm of clearance. This dashboard only displays them.
           </span>
         </div>
       </Card>

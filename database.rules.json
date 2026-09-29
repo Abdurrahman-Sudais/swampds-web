@@ -1,0 +1,15 @@
+{
+  "rules": {
+    ".read": true,
+    ".write": "auth != null && root.child('roles').child(auth.uid).val() === 'admin'",
+    "roles": { ".write": false },
+
+    "sensors":     { ".write": "auth != null && root.child('roles').child(auth.uid).val() === 'device'" },
+    "system":      { ".write": "auth != null && root.child('roles').child(auth.uid).val() === 'device'" },
+    "hardware":    { ".write": "auth != null && root.child('roles').child(auth.uid).val() === 'device'" },
+    "twin":        { ".write": "auth != null && root.child('roles').child(auth.uid).val() === 'device'" },
+    "alerts":      { ".write": "auth != null && root.child('roles').child(auth.uid).val() === 'device'" },
+    "pumpHistory": { ".write": "auth != null && root.child('roles').child(auth.uid).val() === 'device'" },
+    "control":     { ".write": "auth != null && root.child('roles').child(auth.uid).val() === 'device'" }
+  }
+}
