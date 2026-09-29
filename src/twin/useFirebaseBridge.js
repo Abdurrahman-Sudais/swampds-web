@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { createBridge } from './bridge.js';
+import { setBackgroundInterval, clearBackgroundInterval } from './backgroundTimer.js';
 import { friendlyAuthError } from '../auth/authErrors.js';
 
 const newClientId = () => globalThis.crypto?.randomUUID?.() ?? `tab-${Math.random().toString(36).slice(2)}`;
@@ -74,6 +75,9 @@ export function useFirebaseBridge({ sim, config, actions }) {
         ? actionsRef.current.setMode(intent.value, 'dashboard')
         : actionsRef.current.setManualCommand(intent.value, 'dashboard')),
       onStatus: setStatus,
+      // keep publishing at full rate while the twin's tab is in the background
+      setIntervalFn: setBackgroundInterval,
+      clearIntervalFn: clearBackgroundInterval,
     });
     await bridgeRef.current.start(optionsRef.current);
   }, [clientId]);

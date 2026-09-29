@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { DEFAULT_CONFIG } from './config.js';
 import * as engine from './engine.js';
+import { setBackgroundInterval, clearBackgroundInterval } from './backgroundTimer.js';
 
 const NOTICE_MS = 4000;
+const MAX_CATCH_UP_TICKS = 100; // after a long stall (laptop asleep), don't replay more than ~70 s at once
 
 /**
  * Runs the digital-twin engine on a fixed interval and exposes its operator actions.
@@ -20,12 +22,22 @@ export function useTwin() {
   useEffect(() => { simRef.current = sim; }, [sim]);
   useEffect(() => { configRef.current = config; }, [config]);
 
+  // Step the engine by real elapsed time, not by timer callbacks: if the browser delivers ticks
+  // late, the missed steps are run together, so the twin (and what it publishes) keeps real time.
   useEffect(() => {
-    const id = setInterval(
-      () => setSim((s) => engine.step(s, configRef.current)),
-      config.tickSec * 1000,
-    );
-    return () => clearInterval(id);
+    const tickMs = config.tickSec * 1000;
+    let last = Date.now();
+    const handle = setBackgroundInterval(() => {
+      const owed = Math.floor((Date.now() - last) / tickMs);
+      if (owed < 1) return;
+      last += owed * tickMs;
+      const ticks = Math.min(owed, MAX_CATCH_UP_TICKS);
+      setSim((s) => {
+        for (let i = 0; i < ticks; i++) s = engine.step(s, configRef.current);
+        return s;
+      });
+    }, tickMs);
+    return () => clearBackgroundInterval(handle);
   }, [config.tickSec]);
 
   useEffect(() => {

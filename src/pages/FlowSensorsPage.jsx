@@ -74,7 +74,7 @@ function SensorSection({ sensorKey, dataKey, label, color, desc, value, chartDat
             <Tooltip contentStyle={TOOLTIP_STYLE} formatter={v => [`${v} L/min`]} />
             <ReferenceLine y={FLOW_RANGE.min} stroke="#e2e8f0" strokeDasharray="4 2" />
             <ReferenceLine y={FLOW_RANGE.max} stroke="#e2e8f0" strokeDasharray="4 2" />
-            <Line type="monotone" dataKey={dataKey} stroke={color} strokeWidth={2} dot={false} />
+            <Line type="monotone" dataKey={dataKey} stroke={color} strokeWidth={2} dot={false} isAnimationActive={false} />
           </LineChart>
         </ResponsiveContainer>
       </div>

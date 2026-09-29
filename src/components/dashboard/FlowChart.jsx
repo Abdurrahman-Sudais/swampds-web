@@ -19,9 +19,10 @@ const LINES = [
 
 /**
  * @param {{ data: { time: string, F1: number, F2: number }[], noCard?: boolean, animate?: boolean }} props
- * Pass animate={false} for fast-updating data so lines don't re-animate on every sample.
+ * Animation is off by default: this chart shows live data, and re-animating the lines on every
+ * sample reads as lag. Memoised so live readings (every 1-2 s) don't redraw an unchanged chart.
  */
-export default function FlowChart({ data, noCard = false, animate = true }) {
+function FlowChart({ data, noCard = false, animate = false }) {
   const chartContent = data.length < MIN_CHART_POINTS ? (
     <ChartPlaceholder />
   ) : (
@@ -81,3 +82,5 @@ export default function FlowChart({ data, noCard = false, animate = true }) {
     </Card>
   );
 }
+
+export default React.memo(FlowChart);

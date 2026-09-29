@@ -19,8 +19,9 @@ const TOOLTIP_STYLE = {
 
 /**
  * @param {{ data: { time: string, level: number }[], noCard?: boolean }} props
+ * Memoised and not animated: it shows live data, so it should only redraw when a sample is added.
  */
-export default function WaterLevelChart({ data, noCard = false }) {
+function WaterLevelChart({ data, noCard = false }) {
   const chartContent = data.length < MIN_CHART_POINTS ? (
     <ChartPlaceholder />
   ) : (
@@ -56,6 +57,7 @@ export default function WaterLevelChart({ data, noCard = false }) {
             strokeWidth={2}
             fillOpacity={1}
             fill="url(#wlGradient)"
+            isAnimationActive={false}
           />
         </AreaChart>
       </ResponsiveContainer>
@@ -71,3 +73,5 @@ export default function WaterLevelChart({ data, noCard = false }) {
     </Card>
   );
 }
+
+export default React.memo(WaterLevelChart);
