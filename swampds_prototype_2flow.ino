@@ -29,8 +29,8 @@
 #define WIFI_PASSWORD  "YOUR_PASSWORD"
 #define API_KEY        "AIzaSyDHubFwEWFLmBrv_SdYySkR0PMUl_v803k"
 #define DATABASE_URL   "https://swampds-project-default-rtdb.firebaseio.com"
-#define USER_EMAIL     "esp32-device@yourdomain.com"   // account with roles/<uid> = "device"
-#define USER_PASSWORD  "DEVICE_ACCOUNT_PASSWORD"
+#define USER_EMAIL     "device@swampds.com"   // account with roles/<uid> = "device"
+#define USER_PASSWORD  "SWAMPDS"
 #define DEVICE_ID      "SWAMPDS-ESP32-01"
 #define FW_VERSION     "1.1-2flow"
 #define TZ_OFFSET_SEC  3600                             // Nigeria (WAT, UTC+1)
