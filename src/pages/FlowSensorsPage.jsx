@@ -11,41 +11,30 @@ import { useSwampdsData, useChartHistory } from '../data/swampdsData';
 // Expected operating range for each flow sensor
 const FLOW_RANGE = { min: 4.4, max: 5.3 }; // L/min
 
-// Leak detection thresholds
-const THRESHOLDS = [
-  { label: 'Warning trigger',  value: '≥ 0.4 L/min deviation',  color: 'text-amber-600'  },
-  { label: 'Leak trigger',     value: '≥ 1.5 L/min deviation',  color: 'text-orange-600' },
-  { label: 'Fault trigger',    value: 'Any sensor < 1.2 L/min', color: 'text-red-600'    },
-];
+// Below this upstream flow the leak check is skipped (same value in the firmware and the twin)
+const MIN_FLOW_LPM = 0.5;
 
 const SENSOR_META = [
   {
     key:      'flow1',
     dataKey:  'F1',
-    label:    'Flow Sensor 1 - Inlet',
+    label:    'Flow Sensor 1 - Near pump',
     color:    '#10b981',
-    desc:     'First sensor, immediately after the pump. A low reading indicates upstream blockage or pump failure.',
+    desc:     'First sensor, immediately after the pump. It is the reference Sensor 2 is compared against. A low reading indicates a pump or supply problem.',
   },
   {
     key:      'flow2',
     dataKey:  'F2',
-    label:    'Flow Sensor 2 - Midpoint',
+    label:    'Flow Sensor 2 - Downstream',
     color:    '#f59e0b',
-    desc:     'Mid-pipeline sensor. Divergence from Sensor 1 indicates a leak in the first pipe section.',
-  },
-  {
-    key:      'flow3',
-    dataKey:  'F3',
-    label:    'Flow Sensor 3 - Outlet',
-    color:    '#a855f7',
-    desc:     'End-of-pipe sensor. Divergence from Sensor 2 indicates a leak in the second pipe section.',
+    desc:     'Downstream sensor. Reading well below Sensor 1 indicates a leak in the pipe between them. Pipe past this sensor is not monitored.',
   },
 ];
 
 const STATUS_EXPLANATIONS = {
-  normal:  { Icon: CheckCircle2, cls: 'bg-green-50  border-green-200  text-green-800',  iconCls: 'text-green-500',  text: 'All sensors within ±0.3 L/min of each other. No divergence detected.' },
-  warning: { Icon: AlertTriangle, cls: 'bg-amber-50  border-amber-200  text-amber-800', iconCls: 'text-amber-500', text: 'One sensor shows mild divergence (0.4-1.4 L/min). This may indicate early-stage flow restriction. Monitoring closely.' },
-  leak:    { Icon: AlertTriangle, cls: 'bg-orange-50 border-orange-200 text-orange-800', iconCls: 'text-orange-500', text: 'A sensor is reading 1.5 L/min or more below the others - significant divergence. Pipeline leak is suspected. Inspect immediately.' },
+  normal:  { Icon: CheckCircle2, cls: 'bg-green-50  border-green-200  text-green-800',  iconCls: 'text-green-500',  text: 'Sensor 2 is reading within tolerance of Sensor 1. No leak detected between them.' },
+  warning: { Icon: AlertTriangle, cls: 'bg-amber-50  border-amber-200  text-amber-800', iconCls: 'text-amber-500', text: 'Something needs attention - a flow difference being verified, or a pump or water-level issue. Check the alerts for the reason.' },
+  leak:    { Icon: AlertTriangle, cls: 'bg-orange-50 border-orange-200 text-orange-800', iconCls: 'text-orange-500', text: 'Sensor 2 has read well below Sensor 1 for long enough to confirm a leak in the pipe between them. Inspect immediately.' },
   fault:   { Icon: ShieldAlert,   cls: 'bg-red-50    border-red-200    text-red-800',    iconCls: 'text-red-500',   text: 'A sensor is reading near-zero flow (< 1.2 L/min). This indicates sensor failure or complete blockage. Manual inspection required.' },
 };
 
@@ -95,16 +84,23 @@ function SensorSection({ sensorKey, dataKey, label, color, desc, value, chartDat
 }
 
 export default function FlowSensorsPage() {
-  const { sensors, status } = useSwampdsData();
+  const { sensors, status, detection } = useSwampdsData();
   const { flowData }        = useChartHistory();
 
   const statusCfg = STATUS_EXPLANATIONS[status.systemStatus] ?? STATUS_EXPLANATIONS.normal;
   const { Icon: StatusIcon, cls, iconCls, text: statusText } = statusCfg;
 
-  // Live differential stats
-  const flows  = [sensors.flow1, sensors.flow2, sensors.flow3].filter(Boolean);
-  const avg    = flows.length ? flows.reduce((a, b) => a + b, 0) / flows.length : 0;
-  const maxDev = flows.length ? Math.max(...flows.map(v => Math.abs(v - avg))) : 0;
+  // Live difference between the two sensors (what the leak check looks at)
+  const f1      = Number(sensors.flow1) || 0;
+  const f2      = Number(sensors.flow2) || 0;
+  const lossLpm = f1 - f2;
+  const lossPct = f1 >= MIN_FLOW_LPM ? (lossLpm / f1) * 100 : null;
+
+  const rules = [
+    { label: 'Leak trigger',  value: detection.tolerancePct === null ? 'Not reported yet' : `Sensor 2 more than ${detection.tolerancePct}% below Sensor 1`, color: 'text-orange-600' },
+    { label: 'Must last',     value: detection.persistSec === null ? 'Not reported yet' : `${detection.persistSec} s continuously`, color: 'text-amber-600' },
+    { label: 'Checked when',  value: `Sensor 1 reads ${MIN_FLOW_LPM} L/min or more`, color: 'text-slate-600' },
+  ];
 
   return (
     <div className="space-y-6">
@@ -176,10 +172,10 @@ export default function FlowSensorsPage() {
                 })}
                 <tr className="text-slate-500 border-t border-slate-100">
                   <td className="pt-3 text-xs font-medium" colSpan={2}>
-                    Current max deviation from avg
+                    Flow lost between Sensor 1 and 2
                   </td>
                   <td className="pt-3 font-mono font-semibold text-xs sm:text-sm" colSpan={2}>
-                    {maxDev.toFixed(3)} L/min
+                    {lossLpm.toFixed(2)} L/min{lossPct !== null && ` (${lossPct.toFixed(1)}%)`}
                   </td>
                 </tr>
               </tbody>
@@ -189,12 +185,13 @@ export default function FlowSensorsPage() {
 
         {/* Detection thresholds */}
         <Card>
-          <CardHeader title="Leak Detection Thresholds" icon={Activity} iconColorClass="text-slate-400" />
+          <CardHeader title="Leak Detection Rule" icon={Activity} iconColorClass="text-slate-400" />
           <p className="text-xs text-slate-400 mb-4">
-            System status is based on the maximum deviation between the three sensors.
+            A leak is declared when Sensor 2 stays below Sensor 1 by more than the tolerance for the
+            full persistence time. Only the pipe between the two sensors is monitored.
           </p>
           <div className="space-y-3">
-            {THRESHOLDS.map(({ label, value, color }) => (
+            {rules.map(({ label, value, color }) => (
               <div key={label} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100 text-xs sm:text-sm">
                 <span className="font-medium text-slate-700">{label}</span>
                 <span className={`font-bold ${color}`}>{value}</span>
@@ -202,7 +199,7 @@ export default function FlowSensorsPage() {
             ))}
           </div>
           <p className="text-xs text-slate-400 mt-4">
-            These thresholds are shown for reference and cannot be changed from this dashboard.
+            Values are reported by the connected device or digital twin and cannot be changed from this dashboard.
           </p>
         </Card>
       </div>

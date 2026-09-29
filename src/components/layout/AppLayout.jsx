@@ -78,8 +78,8 @@ export default function AppLayout() {
 
       if ('Notification' in window && Notification.permission === 'granted') {
         const messages = {
-          warning: { title: 'SWAMPDS - Warning',       body: 'Flow variation detected. Monitor closely.' },
-          leak:    { title: 'SWAMPDS - Leak Detected', body: 'Significant flow divergence detected. Inspect the pipeline immediately.' },
+          warning: { title: 'SWAMPDS - Warning',       body: 'The system needs attention. Check the alerts.' },
+          leak:    { title: 'SWAMPDS - Leak Detected', body: 'Leak confirmed between Flow Sensor 1 and 2. Inspect the pipeline immediately.' },
           fault:   { title: 'SWAMPDS - Sensor Fault',  body: 'A flow sensor is reading near zero. Manual inspection required.' },
           normal:  { title: 'SWAMPDS - All Clear',     body: 'System has returned to normal operation.' },
         };

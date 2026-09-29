@@ -6,7 +6,7 @@ import { DEFAULT_CONFIG, SEGMENTS, reliableLeakOpening } from './config.js';
 import { DEMO_PRESETS } from './presets.js';
 
 const STOP_TEXT = {
-  leak: 'Pump interlocked by leak protection. Close valves and reset.',
+  leak: 'Pump interlocked by leak protection. Close the valve and reset.',
   'source-empty': 'Pump interlocked: Source tank depleted.',
   'delivery-full': 'Pump standby: Delivery tank full.',
 };
@@ -55,7 +55,7 @@ export default function ControlPanel({ twin }) {
           ))}
         </div>
 
-        {/* Valve Sliders */}
+        {/* Valve Slider (one per monitored segment) */}
         <div className="space-y-3">
           {Object.entries(SEGMENTS).map(([id, seg]) => {
             const val = sim.valves[id];
@@ -85,9 +85,9 @@ export default function ControlPanel({ twin }) {
         </div>
 
         <p className="mt-3 text-[11px] leading-snug text-slate-400 dark:text-slate-500">
-          Leaks are flagged when a segment loses more than {config.tolerancePct}% of its flow. That takes
-          a valve opening of about {reliableLeakOpening(config)}% or more; smaller openings stay within
-          tolerance and are not reported.
+          Leaks are flagged when F2 reads more than {config.tolerancePct}% below F1. That takes a valve
+          opening of about {reliableLeakOpening(config)}% or more; smaller openings stay within tolerance
+          and are not reported. Pipe past F2 is not monitored.
         </p>
 
         {/* Reset Action */}

@@ -29,7 +29,7 @@ const STATUS_CONFIG = {
     badgeBg:  'bg-orange-900/50 text-orange-100',
     Icon:     AlertTriangle,
     label:    'LEAK DETECTED',
-    desc:     'Flow sensor readings have diverged significantly - pipeline leak suspected. Inspect the marked section.',
+    desc:     'Flow Sensor 2 is reading well below Flow Sensor 1 - leak confirmed. Inspect the pipe between the two sensors.',
   },
   warning: {
     bg:       'bg-amber-500',
@@ -37,7 +37,7 @@ const STATUS_CONFIG = {
     badgeBg:  'bg-amber-700/30 text-slate-900',
     Icon:     AlertTriangle,
     label:    'SYSTEM WARNING',
-    desc:     'Minor flow variation detected between sensors. Monitoring for further divergence.',
+    desc:     'Something needs attention, such as a flow difference being verified or a pump or water-level issue. See the alerts for details.',
   },
   normal: {
     bg:       'bg-green-500',

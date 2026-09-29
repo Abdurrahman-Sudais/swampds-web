@@ -40,7 +40,7 @@ function makeTab(fake, { clientId = 'tab-A', email = 'a@team.test', clock } = {}
 const values = (obj) => Object.values(obj ?? {});
 
 test('connecting takes the lock, reports its mode, and publishes the contract', async () => {
-  const fake = createFakeDb({ sensors: { flow1: 4, flow2: 4.6, flow3: 3 }, status: { controlMode: 'manual' } });
+  const fake = createFakeDb({ sensors: { flow1: 4, flow2: 4.6 }, status: { controlMode: 'manual' } });
   const clock = { t: 5_000 };
   const tab = makeTab(fake, { clock });
   tab.advance(4);
@@ -121,7 +121,7 @@ test('a leak reaches the dashboard: status, segment, alert and a pump-history ro
   const tick = async () => { clock.t += 700; tab.advance(); await tab.bridge.publishNow(); };
   for (let i = 0; i < 4; i++) await tick();                       // pump starts
   tab.sim = setValve(tab.sim, 'A', 100);                          // operator action on the twin
-  for (let i = 0; i < 12; i++) await tick();                      // leak confirmed, pump cut
+  for (let i = 0; i < 18; i++) await tick();                      // leak confirmed (10 s window), pump cut
 
   assert.equal(fake.get('system/status'), 'LEAK');
   assert.equal(fake.get('system/leakSegments'), 'A');
@@ -163,10 +163,10 @@ test('events from before connecting are not replayed to the dashboard', async ()
   const fake = createFakeDb();
   const clock = { t: 1000 };
   const tab = makeTab(fake, { clock });
-  tab.advance(4); tab.sim = setValve(tab.sim, 'B', 30);           // history already in the log
+  tab.advance(4); tab.sim = setValve(tab.sim, 'A', 30);           // history already in the log
   await tab.bridge.start();
   // The one alert allowed through is the "connected" notice itself - none of the pre-connection
-  // engine events (e.g. opening Valve B) were replayed.
+  // engine events (e.g. opening Valve A) were replayed.
   const alerts = values(fake.get('alerts'));
   assert.equal(alerts.length, 1);
   assert.match(alerts[0].message, /^Digital twin connected/);

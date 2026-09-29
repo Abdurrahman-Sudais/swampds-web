@@ -13,6 +13,9 @@
 
   Pins, libraries, and setup are otherwise identical to the 3-sensor
   version — see that file's header comment for board/IDE setup.
+
+  Credentials live in secrets.h (git-ignored). Copy secrets.example.h to
+  secrets.h in this folder and fill it in before compiling.
 */
 
 #include <WiFi.h>
@@ -25,12 +28,9 @@
 #include <addons/TokenHelper.h>
 
 // ======================= Credentials =======================
-#define WIFI_SSID      "YOUR_WIFI"
-#define WIFI_PASSWORD  "YOUR_PASSWORD"
-#define API_KEY        "AIzaSyDHubFwEWFLmBrv_SdYySkR0PMUl_v803k"
-#define DATABASE_URL   "https://swampds-project-default-rtdb.firebaseio.com"
-#define USER_EMAIL     "device@swampds.com"   // account with roles/<uid> = "device"
-#define USER_PASSWORD  "SWAMPDS"
+// WIFI_SSID, WIFI_PASSWORD, API_KEY, DATABASE_URL, USER_EMAIL, USER_PASSWORD
+#include "secrets.h"
+
 #define DEVICE_ID      "SWAMPDS-ESP32-01"
 #define FW_VERSION     "1.1-2flow"
 #define TZ_OFFSET_SEC  3600                             // Nigeria (WAT, UTC+1)
@@ -48,16 +48,16 @@ const uint8_t FLOW_PINS[2] = {32, 33};                  // flow1 = nearest the p
 #define PIN_BUZZER 14
 #define RELAY_ACTIVE_HIGH true                          // many relay boards are active-LOW: set false
 
-// ======================= Tunables — copy these from the twin's engine config =======================
-const float DELIVERY_HEIGHT_CM   = 9.5;
-const float SENSOR_TO_BOTTOM_CM  = 12.5;
+// ======================= Tunables — keep in step with src/twin/config.js and PUMP_THRESHOLDS =======================
+const float DELIVERY_HEIGHT_CM   = 18.0;         // physical tank height
+const float SENSOR_TO_BOTTOM_CM  = 18.0;         // ultrasonic sensor to tank bottom — MEASURE this on the rig
 const float FLOW_K[2]            = {7.5, 7.5};   // pulses/s per L/min — calibrate each sensor
 const float TOLERANCE_PCT        = 20.0;         // flow loss between flow1/flow2 that counts as a leak
 const uint32_t PERSIST_SEC       = 10;
 const float MIN_FLOW_LPM         = 0.5;
-const float PUMP_ON_BELOW_PCT    = 0.0;
-const float PUMP_OFF_ABOVE_PCT   = 100.0;
-const float LOW_LEVEL_WARN_PCT   = 0.0;
+const float PUMP_ON_BELOW_CM     = 2.0;          // auto: pump ON at or below this water depth
+const float PUMP_OFF_ABOVE_CM    = 13.0;         // auto: pump OFF at or above; leaves 5 cm below the sensor (HC-SR04 dead zone + ripple)
+const float LOW_LEVEL_WARN_CM    = 1.0;          // warning below this depth (pump should have started at 2 cm)
 const uint32_t DRY_RUN_SEC       = 15;
 const float DRY_RUN_MIN_FLOW     = 0.3;
 const uint32_t DRY_RUN_HOLD_MS   = 60000;
@@ -90,8 +90,8 @@ String manualCommand = "off";
 uint32_t dryRunHoldUntil = 0;
 bool dryRunHoldActive = false;   // separate flag so the millis() rollover can't fake a hold
 
-bool leakA = false;               // single segment now. LATCHED on purpose: it stays true (pump blocked in AUTO)
-                                  // until the mode is toggled auto->manual->auto, so someone must inspect the pipe.
+bool leakA = false;               // single segment now. LATCHED on purpose: it stays true (pump blocked in both
+                                  // modes) until the operator switches mode, so someone must inspect the pipe.
 uint32_t overSinceA = 0;
 
 Status status = S_NORMAL, prevStatus = S_NORMAL;
@@ -238,8 +238,13 @@ void checkDryRun(uint32_t now) {
 void runPumpControl(uint32_t now) {
   if (modeAuto) {
     bool blocked = sensorFault || leakA || holdActive(now);
-    if (pumpOn && (levelPct >= PUMP_OFF_ABOVE_PCT || blocked)) setPump(false);
-    else if (!pumpOn && !blocked && levelPct <= PUMP_ON_BELOW_PCT) setPump(true);
+    if (pumpOn && (levelCm >= PUMP_OFF_ABOVE_CM || blocked)) setPump(false);
+    else if (!pumpOn && !blocked && levelCm <= PUMP_ON_BELOW_CM) setPump(true);
+  } else if (leakA) {
+    // Leak protection overrides manual mode (same as the twin). Drop the command too, so the
+    // pump does not restart by itself once the leak is cleared by switching modes.
+    setPump(false);
+    if (manualCommand != "off") { manualCommand = "off"; writePumpCommand("off"); }
   } else {
     setPump(manualCommand == "on");
   }
@@ -282,7 +287,7 @@ void evaluateStatus() {
   String warn = "";
   if (sensorFault) warn = "Water level sensor is not responding.";
   else if (holdActive(millis())) warn = "Pump stopped after running without flow.";
-  else if (levelPct < LOW_LEVEL_WARN_PCT) warn = "Water level is low (" + String((int)round(levelPct)) + "%).";
+  else if (levelCm < LOW_LEVEL_WARN_CM) warn = "Water level is low (" + String(levelCm, 1) + " cm).";
 
   status = leakA ? S_LEAK : (warn.length() ? S_WARNING : S_NORMAL);
 

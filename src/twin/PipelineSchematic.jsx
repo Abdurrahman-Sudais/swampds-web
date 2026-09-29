@@ -9,19 +9,23 @@ import { getTankFragment } from './tankVariants/index.js';
 const FULL_TANK_SIZE = { w: 52, h: 68 };
 const COMPACT_TANK_SIZE = { w: 28, h: 44 };
 
+// Nodes, left to right: source, pump, F1, valve A, F2, delivery.
+const NODE_COUNT = 6;
+
 const HORIZONTAL = {
   viewBox: '0 0 920 180',
-  at: (i) => ({ x: 60 + i * 115, y: 80 }),
+  at: (i) => ({ x: 60 + i * 160, y: 80 }),
 };
 
-const PIPE_SEGMENT = [null, null, 'A', 'A', 'B', 'B', null];
+// Which monitored segment each pipe run belongs to. Past F2 nothing is monitored.
+const PIPE_SEGMENT = [null, null, 'A', 'A', null];
 
 function FullSchematic({ sim, onToggleValve, onTogglePump, tankStyle }) {
   const layout = HORIZONTAL;
-  const pos = Array.from({ length: 8 }, (_, i) => layout.at(i));
+  const pos = Array.from({ length: NODE_COUNT }, (_, i) => layout.at(i));
   const { flows, tanks, valves, leakFlow, segments, pumpOn } = sim;
 
-  const pipeFlow = [flows.f1, flows.f1, flows.f1, flows.f2, flows.f2, flows.f3, flows.f3];
+  const pipeFlow = [flows.f1, flows.f1, flows.f1, flows.f2, flows.f2];
 
   const getPipeColor = (segId) => {
     if (!segId) return 'stroke-slate-200 dark:stroke-slate-800';
@@ -176,60 +180,8 @@ function FullSchematic({ sim, onToggleValve, onTogglePump, tankStyle }) {
           </text>
         </g>
 
-        {/* Node 5: Valve B */}
-        <g
-          transform={`translate(${pos[5].x},${pos[5].y})`}
-          className="cursor-pointer"
-          onClick={() => onToggleValve?.('B', valves.B > 0 ? 0 : 25)}
-        >
-          <circle
-            r="18"
-            className={
-              valves.B > 0
-                ? 'fill-amber-50 dark:fill-amber-950/40 stroke-amber-500'
-                : 'fill-white dark:fill-slate-900 stroke-slate-300 dark:stroke-slate-700'
-            }
-            strokeWidth="2"
-          />
-          <text
-            textAnchor="middle"
-            y="4"
-            fontSize="11"
-            fontWeight="700"
-            className={valves.B > 0 ? 'fill-amber-600 dark:fill-amber-400 font-mono' : 'fill-slate-600 dark:fill-slate-400 font-mono'}
-          >
-            VB
-          </text>
-          {/* Subtle drip if leaking */}
-          {leakFlow.B > 0.05 && (
-            <circle cx="0" cy="24" r="3" fill="#0284c7" className="gentle-drip" />
-          )}
-        </g>
-
-        {/* Node 6: Sensor F3 */}
-        <g transform={`translate(${pos[6].x},${pos[6].y})`}>
-          <rect
-            x="-24"
-            y="-18"
-            width="48"
-            height="36"
-            rx="8"
-            className="fill-white dark:fill-slate-900 stroke-slate-300 dark:stroke-slate-700"
-            strokeWidth="2"
-          />
-          <text
-            textAnchor="middle"
-            y="4"
-            fontSize="11"
-            fontWeight="700"
-            className="fill-blue-600 dark:fill-blue-400 font-mono"
-          >
-            F3
-          </text>
-        </g>
-
-        {/* Node 7: Delivery Tank */}
-        <g transform={`translate(${pos[7].x - FULL_TANK_SIZE.w / 2},${pos[7].y - FULL_TANK_SIZE.h / 2})`}>
+        {/* Node 5: Delivery Tank */}
+        <g transform={`translate(${pos[5].x - FULL_TANK_SIZE.w / 2},${pos[5].y - FULL_TANK_SIZE.h / 2})`}>
           {React.createElement(getTankFragment(tankStyle), { percent: tanks.delivery, active: pumpOn, ...FULL_TANK_SIZE })}
         </g>
 
@@ -262,20 +214,8 @@ function FullSchematic({ sim, onToggleValve, onTogglePump, tankStyle }) {
               {flows.f2.toFixed(2)} L/m
             </text>
 
-            {/* Valve B */}
-            <text x={pos[5].x} y="128" textAnchor="middle" fontSize="10" fontWeight="600" className="fill-slate-400 uppercase tracking-wider">Valve B</text>
-            <text x={pos[5].x} y="142" textAnchor="middle" fontSize="10.5" fontWeight="600" className={valves.B > 0 ? 'fill-amber-600 font-mono' : 'fill-slate-400 font-mono'}>
-              {valves.B}%
-            </text>
-
-            {/* F3 */}
-            <text x={pos[6].x} y="128" textAnchor="middle" fontSize="10" fontWeight="600" className="fill-slate-400 uppercase tracking-wider">Sensor 3</text>
-            <text x={pos[6].x} y="142" textAnchor="middle" fontSize="10.5" fontWeight="600" className="fill-slate-700 dark:fill-slate-300 font-mono">
-              {flows.f3.toFixed(2)} L/m
-            </text>
-
             {/* Delivery */}
-            <text x={pos[7].x} y="132" textAnchor="middle" fontSize="10" fontWeight="600" className="fill-slate-400 uppercase tracking-wider">Delivery</text>
+            <text x={pos[5].x} y="132" textAnchor="middle" fontSize="10" fontWeight="600" className="fill-slate-400 uppercase tracking-wider">Delivery</text>
           </>
       </svg>
     </div>
@@ -283,12 +223,12 @@ function FullSchematic({ sim, onToggleValve, onTogglePump, tankStyle }) {
 }
 
 // Compact horizontal layout (phones and tablets)
-// Same left-to-right flow as the full layout, drawn at real sizes (8 nodes in ~330 units) so
+// Same left-to-right flow as the full layout, drawn at real sizes (6 nodes in ~330 units) so
 // text stays legible instead of being shrunk with the whole picture.
 
 const COMPACT = {
   viewBox: '0 0 328 100',
-  at: (i) => ({ x: 22 + i * 40, y: 38 }),
+  at: (i) => ({ x: 22 + i * 57, y: 38 }),
 };
 
 const INK = 'fill-slate-800 dark:fill-slate-100 font-mono';
@@ -311,8 +251,8 @@ function Caption({ x, row, children, className = MUTED, mono = false, size = 10,
 
 function CompactSchematic({ sim, onToggleValve, onTogglePump, tankStyle }) {
   const { flows, tanks, valves, leakFlow, segments, pumpOn } = sim;
-  const pos = Array.from({ length: 8 }, (_, i) => COMPACT.at(i));
-  const pipeFlow = [flows.f1, flows.f1, flows.f1, flows.f2, flows.f2, flows.f3, flows.f3];
+  const pos = Array.from({ length: NODE_COUNT }, (_, i) => COMPACT.at(i));
+  const pipeFlow = [flows.f1, flows.f1, flows.f1, flows.f2, flows.f2];
 
   const pipeClass = (segId) => {
     if (!segId) return 'stroke-slate-200 dark:stroke-slate-800';
@@ -393,9 +333,7 @@ function CompactSchematic({ sim, onToggleValve, onTogglePump, tankStyle }) {
         {sensor(2, 'F1')}
         {valve(3, 'A')}
         {sensor(4, 'F2')}
-        {valve(5, 'B')}
-        {sensor(6, 'F3')}
-        {tank(7, tanks.delivery)}
+        {tank(5, tanks.delivery)}
 
         <Caption x={pos[0].x} row={1}>Source</Caption>
         <Caption x={pos[1].x} row={1}>Pump</Caption>
@@ -403,14 +341,14 @@ function CompactSchematic({ sim, onToggleValve, onTogglePump, tankStyle }) {
           {pumpOn ? 'ON' : 'OFF'}
         </Caption>
 
-        {[[2, flows.f1], [4, flows.f2], [6, flows.f3]].map(([i, v]) => (
+        {[[2, flows.f1], [4, flows.f2]].map(([i, v]) => (
           <React.Fragment key={i}>
             <Caption x={pos[i].x} row={1} size={11} weight={700} mono className={INK}>{v.toFixed(2)}</Caption>
             <Caption x={pos[i].x} row={2}>L/min</Caption>
           </React.Fragment>
         ))}
 
-        {[[3, 'A'], [5, 'B']].map(([i, id]) => (
+        {[[3, 'A']].map(([i, id]) => (
           <React.Fragment key={id}>
             <Caption x={pos[i].x} row={1} size={11} weight={700} mono
               className={valves[id] > 0 ? 'fill-amber-600 dark:fill-amber-400' : 'fill-slate-400'}>
@@ -420,7 +358,7 @@ function CompactSchematic({ sim, onToggleValve, onTogglePump, tankStyle }) {
           </React.Fragment>
         ))}
 
-        <Caption x={pos[7].x} row={1}>Delivery</Caption>
+        <Caption x={pos[5].x} row={1}>Delivery</Caption>
       </svg>
     </div>
   );

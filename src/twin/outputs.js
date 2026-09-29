@@ -28,12 +28,11 @@ export function deriveOutputs(state) {
         '!! LEAK DETECTED !!',
         `Section: ${leakSegments.map((id) => SEGMENTS[id].from + '-' + SEGMENTS[id].to).join(', ')}`,
         'Pump: OFF (cut-off)',
-        'Close valves, then reset',
+        'Close valve, then reset',
       ]
     : [
         `F1 ${fmt(flows.f1)} L/min`,
         `F2 ${fmt(flows.f2)} L/min`,
-        `F3 ${fmt(flows.f3)} L/min`,
         `Tank ${Math.round(tanks.delivery)}%  Pump ${pumpOn ? 'ON' : 'OFF'}`,
       ];
 

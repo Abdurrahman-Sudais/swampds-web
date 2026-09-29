@@ -1,7 +1,7 @@
 /**
  * @fileoverview SWAMPDS data layer - the only file that talks to Firebase.
  *
- * useSwampdsData()     live sensor + status + alerts snapshot
+ * useSwampdsData()     live sensor + status + alerts snapshot (two flow sensors: flow1, flow2)
  * useChartHistory()    { flowData, waterLevelData } for trend charts, built from
  *                      readings recorded here as they arrive (Firebase keeps no history)
  * sendPumpCommand(cmd) write "on" | "off" to the pump command
@@ -15,20 +15,32 @@ import { app } from '../firebase/firebaseConfig';
 
 const db = getDatabase(app);
 
-/** Auto-pump thresholds (% water level). Display values only - the web app does not enforce them. */
-export const PUMP_THRESHOLDS = { low: 20, full: 95 };
+/**
+ * Auto-pump thresholds used by the firmware (PUMP_ON_BELOW_CM / PUMP_OFF_ABOVE_CM in an 18 cm tank).
+ * Display values only - the web app does not enforce them. `low` / `full` are the same levels in %.
+ */
+const TANK_CM = 18;
+export const PUMP_THRESHOLDS = {
+  lowCm: 2,
+  fullCm: 13,
+  low:  Math.round((2 / TANK_CM) * 100),   // 11 %
+  full: Math.round((13 / TANK_CM) * 100),  // 72 %
+};
 
 // Live store (populated by Firebase onValue)
 
 const initialData = {
   sensors: {
-    flow1: 0, flow2: 0, flow3: 0,
+    flow1: 0, flow2: 0,
     waterLevelPercent: 0, waterLevelCm: 0,
     lastUpdated: Date.now(),
   },
   status:  { systemStatus: 'normal', pumpStatus: 'off', controlMode: 'auto' },
   control: { pumpCommand: 'off' },
   alerts:  [],
+  // Leak rule in use, as published by the device or twin (twin/tolerancePct, twin/persistSec).
+  // Null until something publishes it.
+  detection: { tolerancePct: null, persistSec: null },
   loaded:  false, // true once the first real Firebase snapshot has arrived
   // Where the data comes from. `receivedAt` is the LOCAL time the heartbeat (sensors/lastUpdated)
   // last changed, so staleness does not depend on the publisher's clock being right.
@@ -88,6 +100,10 @@ onValue(ref(db, '/'), (snap) => {
     status:  mappedStatus,
     control: val.control ?? initialData.control,
     alerts,
+    detection: {
+      tolerancePct: Number.isFinite(val.twin?.tolerancePct) ? val.twin.tolerancePct : null,
+      persistSec:   Number.isFinite(val.twin?.persistSec)   ? val.twin.persistSec   : null,
+    },
     loaded: true,
     meta,
   });
@@ -110,7 +126,7 @@ const _timeLabel = (ts) =>
   new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
 const _deriveCharts = (samples) => ({
-  flowData:       samples.map(s => ({ time: _timeLabel(s.ts), F1: s.f1, F2: s.f2, F3: s.f3 })),
+  flowData:       samples.map(s => ({ time: _timeLabel(s.ts), F1: s.f1, F2: s.f2 })),
   waterLevelData: samples.map(s => ({ time: _timeLabel(s.ts), level: s.level })),
 });
 
@@ -131,16 +147,15 @@ const _chartListeners = new Set();
 function _recordSample(sensors) {
   const f1 = Number(sensors.flow1);
   const f2 = Number(sensors.flow2);
-  const f3 = Number(sensors.flow3);
   const level = Number(sensors.waterLevelPercent);
-  if (![f1, f2, f3, level].every(Number.isFinite)) return;
+  if (![f1, f2, level].every(Number.isFinite)) return;
 
   const now  = Date.now();
   const last = _samples[_samples.length - 1];
   if (last && now - last.ts < SAMPLE_INTERVAL_MS) return;
 
   const cutoff = now - HISTORY_WINDOW_MS;
-  _samples = [..._samples.filter(s => s.ts >= cutoff), { ts: now, f1, f2, f3, level }];
+  _samples = [..._samples.filter(s => s.ts >= cutoff), { ts: now, f1, f2, level }];
   _charts  = _deriveCharts(_samples);
   _chartListeners.forEach(fn => fn(_charts));
 

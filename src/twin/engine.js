@@ -1,14 +1,14 @@
 /**
  * @fileoverview Digital-twin simulation engine (pure, no React, no Firebase).
  *
- * Pipeline: SOURCE TANK -> PUMP -> F1 -> VALVE A -> F2 -> VALVE B -> F3 -> DELIVERY TANK.
- * Flow is conserved: a leak at a valve reduces every sensor downstream of it
- * (F3 = F1 - leakA - leakB), not just the next one.
+ * Pipeline: SOURCE TANK -> PUMP -> F1 -> VALVE A -> F2 -> DELIVERY TANK.
+ * Two flow sensors, so there is one monitored segment (A, between F1 and F2), matching
+ * the 2-sensor prototype firmware. Pipe downstream of F2 is not monitored.
  *
- * Detection is compare-and-persist: each segment compares its two neighbouring
- * sensors (% difference). A difference above tolerance starts a timer (status
- * "warning"); it lasting `persistSec` declares a leak, which latches - the pump
- * cuts off and the alarm stays on until the operator resets it with both valves closed.
+ * Detection is compare-and-persist, as in the firmware: the share of F1's flow missing at F2 (%).
+ * A difference above tolerance starts a timer (status "warning"); it lasting `persistSec`
+ * declares a leak, which latches - the pump cuts off and the alarm stays on until the
+ * operator resets it with the valve closed.
  *
  * Every function takes a state and returns a new one. Randomness is injected (`rng`)
  * so tests are deterministic.
@@ -16,7 +16,7 @@
 
 import { DEFAULT_CONFIG } from './config.js';
 
-const SEGMENT_IDS = ['A', 'B'];
+const SEGMENT_IDS = ['A'];
 const MAX_EVENTS = 200;
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -36,14 +36,14 @@ export function createInitialState() {
     autoRun: false,          // auto-mode hysteresis memory
     pumpOn: false,           // relay closed and pump powered
     stopReason: null,        // why a wanted pump is held off: 'leak' | 'source-empty' | 'delivery-full'
-    valves: { A: 0, B: 0 },  // leak valve opening, 0-100 %
-    tanks: { source: 100, delivery: 15 }, // percent full
-    flows: { f1: 0, f2: 0, f3: 0 },       // sensor readings, L/min
-    leakFlow: { A: 0, B: 0 },             // true water being lost, L/min (for the schematic)
-    segments: { A: emptySegment(), B: emptySegment() },
+    valves: { A: 0 },        // leak valve opening, 0-100 %
+    tanks: { source: 100, delivery: 5 },  // percent full; below lowLevelPct so auto mode starts the pump
+    flows: { f1: 0, f2: 0 },              // sensor readings, L/min
+    leakFlow: { A: 0 },                   // true water being lost, L/min (for the schematic)
+    segments: { A: emptySegment() },
     status: 'normal',        // 'normal' | 'warning' | 'leak'
     latched: false,          // a leak was confirmed and not yet reset
-    leakSegments: [],        // e.g. ['A'], ['B'], ['A', 'B']
+    leakSegments: [],        // ['A'] while a leak is latched
     history: [],
     events: [],
   }, 'info', 'system', 'Digital twin started.');
@@ -72,7 +72,7 @@ export function step(state, config = DEFAULT_CONFIG, dt = config.tickSec, rng = 
   s = runPhysics(s, config, dt, rng);
   s = runDetection(s, config, dt);
 
-  const sample = { t: round2(s.t), F1: s.flows.f1, F2: s.flows.f2, F3: s.flows.f3, level: round2(s.tanks.delivery) };
+  const sample = { t: round2(s.t), F1: s.flows.f1, F2: s.flows.f2, level: round2(s.tanks.delivery) };
   return { ...s, history: [...s.history, sample].slice(-config.historyLength) };
 }
 
@@ -120,8 +120,6 @@ function runPhysics(s, config, dt, rng) {
   const trueF1 = s.pumpOn ? config.baseFlowLpm : 0;
   const leakA = trueF1 * (s.valves.A / 100) * config.maxLeakFraction;
   const trueF2 = trueF1 - leakA;
-  const leakB = trueF2 * (s.valves.B / 100) * config.maxLeakFraction;
-  const trueF3 = trueF2 - leakB;
 
   const read = (trueFlow, i) => {
     if (trueFlow <= 0) return 0;
@@ -132,19 +130,19 @@ function runPhysics(s, config, dt, rng) {
   const perMin = dt / 60;
   return {
     ...s,
-    flows: { f1: read(trueF1, 0), f2: read(trueF2, 1), f3: read(trueF3, 2) },
-    leakFlow: { A: leakA, B: leakB },
+    flows: { f1: read(trueF1, 0), f2: read(trueF2, 1) },
+    leakFlow: { A: leakA },
     tanks: {
       source:   clamp(s.tanks.source   - (trueF1 * perMin / config.sourceCapacityL)   * 100, 0, 100),
-      delivery: clamp(s.tanks.delivery + (trueF3 * perMin / config.deliveryCapacityL) * 100, 0, 100),
+      delivery: clamp(s.tanks.delivery + (trueF2 * perMin / config.deliveryCapacityL) * 100, 0, 100),
     },
   };
 }
 
 /** Compare neighbouring sensors per segment; declare a leak only once it persists. */
 function runDetection(s, config, dt) {
-  const { f1, f2, f3 } = s.flows;
-  const pairs = { A: [f1, f2], B: [f2, f3] };
+  const { f1, f2 } = s.flows;
+  const pairs = { A: [f1, f2] };
 
   const segments = {};
   for (const id of SEGMENT_IDS) {
@@ -157,7 +155,7 @@ function runDetection(s, config, dt) {
       segments[id] = prev.leak ? prev : { diffPct: 0, abnormalFor: 0, leak: false };
       continue;
     }
-    const diffPct = (Math.abs(up - down) / up) * 100;
+    const diffPct = Math.max(0, ((up - down) / up) * 100); // only a loss counts, as in the firmware
     const abnormalFor = diffPct > config.tolerancePct ? prev.abnormalFor + dt : 0;
     segments[id] = { diffPct, abnormalFor, leak: prev.leak || abnormalFor >= config.persistSec };
   }
@@ -198,7 +196,7 @@ function runDetection(s, config, dt) {
   return next;
 }
 
-const SEG_TEXT = { A: 'F1 → F2', B: 'F2 → F3' };
+const SEG_TEXT = { A: 'F1 → F2' };
 
 // Operator actions
 
@@ -231,15 +229,15 @@ export function setManualCommand(state, command, origin) {
 }
 
 /**
- * Acknowledge a leak alarm. Succeeds only when both valves are closed.
+ * Acknowledge a leak alarm. Succeeds only when the leak valve is closed.
  * @returns {{ state: object, ok: boolean, reason?: string }}
  */
 export function acknowledgeReset(state) {
   if (!state.latched) {
     return { state, ok: false, reason: 'There is no active leak alarm to reset.' };
   }
-  if (state.valves.A > 0 || state.valves.B > 0) {
-    const reason = 'Close both leak valves before resetting.';
+  if (state.valves.A > 0) {
+    const reason = 'Close the leak valve before resetting.';
     return { state: addEvent(state, 'warning', 'operator', `Reset refused: ${reason.toLowerCase()}`), ok: false, reason };
   }
   const next = {
@@ -248,7 +246,7 @@ export function acknowledgeReset(state) {
     leakSegments: [],
     status: 'normal',
     stopReason: null,
-    segments: { A: emptySegment(), B: emptySegment() },
+    segments: { A: emptySegment() },
   };
   return { state: addEvent(next, 'info', 'operator', 'Operator acknowledged the alarm and reset the system.'), ok: true };
 }

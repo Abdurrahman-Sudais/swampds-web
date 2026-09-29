@@ -55,20 +55,20 @@ test('sensor noise and calibration bias alone never cause a warning or leak', ()
   const rng = seeded(42);
   for (let i = 0; i < 3000; i++) {
     s = step(s, CFG, DT, rng);
-    if (s.tanks.delivery >= 90) s = emptyDelivery(s); // keep it running across many cycles
+    if (s.tanks.delivery >= CFG.fullLevelPct - 1) s = emptyDelivery(s); // keep it running across many cycles
     if (s.tanks.source <= 10) s = refillSource(s);
     assert.equal(s.status, 'normal', `status left normal at tick ${i}`);
   }
 });
 
-test('flow is conserved: a leak reduces every sensor downstream of it', () => {
-  const clean = { ...CFG, noisePct: 0, sensorBiasPct: [0, 0, 0] };
-  let s = setValve(setValve(runningPump(), 'A', 50), 'B', 50);
+test('flow is conserved: a leak reduces the downstream sensor and what reaches the tank', () => {
+  const clean = { ...CFG, noisePct: 0, sensorBiasPct: [0, 0] };
+  let s = setValve(runningPump(), 'A', 50);
   s = step(s, clean, DT, seeded());
-  // 50% open * 0.6 max leak = 30% loss per valve
+  // 50% open * 0.6 max leak = 30% loss
   assert.ok(Math.abs(s.flows.f1 - 4.8) < 0.01);
   assert.ok(Math.abs(s.flows.f2 - 4.8 * 0.7) < 0.01);
-  assert.ok(Math.abs(s.flows.f3 - 4.8 * 0.7 * 0.7) < 0.01);
+  assert.deepEqual(Object.keys(s.flows), ['f1', 'f2'], 'two flow sensors');
 });
 
 test('a leak is declared only after the difference persists past the threshold duration', () => {
@@ -88,7 +88,7 @@ test('a leak is declared only after the difference persists past the threshold d
 
 test('a brief spike shorter than the persistence window does not declare a leak', () => {
   let s = setValve(runningPump(), 'A', 100);
-  s = run(s, 2);                       // 1.4 s abnormal, window is 3 s
+  s = run(s, 2);                       // 1.4 s abnormal, window is 10 s
   assert.equal(s.status, 'warning');
   s = run(setValve(s, 'A', 0), 3);
   assert.equal(s.status, 'normal');
@@ -96,14 +96,9 @@ test('a brief spike shorter than the persistence window does not declare a leak'
   assert.ok(s.events.some((e) => e.message.includes('no leak declared')));
 });
 
-test('the affected segment is identified: A, B, or both', () => {
-  const detect = (a, b) => {
-    const s0 = setValve(setValve(runningPump(), 'A', a), 'B', b);
-    return runUntil(s0, (x) => x.latched).state.leakSegments;
-  };
-  assert.deepEqual(detect(100, 0), ['A']);
-  assert.deepEqual(detect(0, 100), ['B']);
-  assert.deepEqual(detect(100, 100), ['A', 'B']);
+test('a confirmed leak is reported on segment A (F1 -> F2), the only monitored segment', () => {
+  const { state } = runUntil(setValve(runningPump(), 'A', 100), (x) => x.latched);
+  assert.deepEqual(state.leakSegments, ['A']);
 });
 
 test('confirmed leak cuts the pump in the same tick and every output agrees', () => {
@@ -134,12 +129,12 @@ test('leak protection overrides manual mode', () => {
   let s = setManualCommand(setMode(runningPump(), 'manual'), 'on');
   s = run(s, 2);
   assert.equal(s.pumpOn, true);
-  const { state } = runUntil(setValve(s, 'B', 100), (x) => x.latched);
+  const { state } = runUntil(setValve(s, 'A', 100), (x) => x.latched);
   assert.equal(state.pumpOn, false);
-  assert.deepEqual(state.leakSegments, ['B']);
+  assert.deepEqual(state.leakSegments, ['A']);
 });
 
-test('reset is refused while a valve is open, and works once both are closed', () => {
+test('reset is refused while the valve is open, and works once it is closed', () => {
   let { state: s } = runUntil(setValve(runningPump(), 'A', 100), (x) => x.latched);
 
   const refused = acknowledgeReset(s);
@@ -164,7 +159,7 @@ test('reset with no active alarm does nothing', () => {
 
 test('auto mode uses hysteresis: stops at the full level, restarts only at the low level', () => {
   let s = createInitialState();
-  s = { ...s, tanks: { ...s.tanks, delivery: 94.9 } };
+  s = { ...s, tanks: { ...s.tanks, delivery: CFG.fullLevelPct - 0.1 } };
   s = { ...s, autoRun: true };
   const { state: full } = runUntil(s, (x) => !x.pumpOn);
   assert.ok(full.tanks.delivery >= CFG.fullLevelPct);
@@ -237,20 +232,20 @@ function detectionRate(opening, config = CFG) {
 }
 
 test('reliableLeakOpening is the smallest opening the detector really catches', () => {
-  assert.equal(reliableLeakOpening(CFG), 20);
+  assert.equal(reliableLeakOpening(CFG), 39);
   assert.ok(detectionRate(reliableLeakOpening(CFG)) >= 0.98);
-  assert.equal(detectionRate(15), 0, '15% opening loses 9% of flow, inside the 10% tolerance');
+  assert.equal(detectionRate(25), 0, '25% opening loses 15% of flow, inside the 20% tolerance');
 
-  const loose = { ...CFG, tolerancePct: 20 };
+  const loose = { ...CFG, tolerancePct: 10 };
   assert.ok(detectionRate(reliableLeakOpening(loose), loose) >= 0.98);
 });
 
 test('every leak preset opens a valve far enough to be detected with default settings', () => {
   for (const preset of DEMO_PRESETS.filter((p) => p.id !== 'normal')) {
-    const opened = { A: 0, B: 0 };
+    const opened = { A: 0 };
     preset.apply({ setValve: (id, v) => { opened[id] = v; }, setMode() {}, refillSource() {} });
     assert.ok(
-      Math.max(opened.A, opened.B) >= reliableLeakOpening(CFG),
+      opened.A >= reliableLeakOpening(CFG),
       `${preset.id} opens only ${JSON.stringify(opened)}`,
     );
   }

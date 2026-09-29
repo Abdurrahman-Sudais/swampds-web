@@ -1,8 +1,8 @@
 # SWAMPDS
 
-Smart Water Management & Pipeline Leak Detection System. A web dashboard plus a browser-based **digital twin** that stands in for the physical prototype (ESP32, three inline flow sensors, relay, pump).
+Smart Water Management & Pipeline Leak Detection System. A web dashboard plus a browser-based **digital twin** that stands in for the physical prototype (ESP32, two inline flow sensors, relay, pump). Firmware: [`swampds_prototype_2flow.ino`](swampds_prototype_2flow.ino).
 
-Water path: `SOURCE TANK → PUMP → F1 → VALVE A → F2 → VALVE B → F3 → DELIVERY TANK`. A leak is declared when the flow difference between neighbouring sensors stays above a tolerance for a set time (compare-and-persist), which also identifies the affected segment and cuts the pump.
+Water path: `SOURCE TANK → PUMP → F1 → VALVE A → F2 → DELIVERY TANK`. A leak is declared when F2 reads below F1 by more than a tolerance for a set time (compare-and-persist), which cuts the pump. Only the pipe between F1 and F2 (segment `A`) is monitored; a leak past F2 is not detected.
 
 ## Two ways to use it
 
@@ -28,7 +28,7 @@ Defined in [`src/twin/contract.js`](src/twin/contract.js). Real hardware should 
 
 | Path | Written by | Value |
 |---|---|---|
-| `sensors/flow1`, `flow2`, `flow3` | device | L/min |
+| `sensors/flow1`, `flow2` | device | L/min (F1 near the pump, F2 downstream) |
 | `sensors/waterLevelPercent`, `waterLevelCm` | device | delivery tank level |
 | `sensors/lastUpdated` | device | ms epoch; **changes on every update** (heartbeat) |
 | `system/status` | device | `NORMAL` \| `WARNING` \| `LEAK` |
@@ -37,12 +37,19 @@ Defined in [`src/twin/contract.js`](src/twin/contract.js). Real hardware should 
 | `system/pumpStartedAt` | device | ms epoch the current run began; absent while the pump is off, so the dashboard can show a real runtime instead of counting from when its page loaded |
 | `system/source` | device | e.g. `digital-twin`; dashboard warns if it is the twin |
 | `system/online` | device | `true`; set to `false` on clean disconnect |
-| `system/leakSegments` | device | `A`, `B` or `A,B` (absent when no leak) |
+| `system/leakSegments` | device | `A` (absent when no leak) |
+| `twin/tolerancePct`, `twin/persistSec` | device | leak rule in use; shown on the Flow Sensors page |
 | `alerts/<id>` | device | `{ time, severity, message, timestamp }`; includes a connect/disconnect notice each time the twin links to the dashboard, so that's visible in the alert list and pumping-history log, not just the banner |
 | `pumpHistory/<id>` | device | `{ date, start, end, duration, startTimestamp }` |
 | `status/controlMode` | dashboard | `auto` \| `manual` |
 | `control/pumpCommand` | dashboard | `on` \| `off` (manual mode only) |
 | `twinLock` | twin | single-publisher lock |
+
+## Firmware
+
+[`swampds_prototype_2flow.ino`](swampds_prototype_2flow.ino) runs the ESP32 prototype. Before compiling, copy [`secrets.example.h`](secrets.example.h) to `secrets.h` in the same folder and fill in the Wi-Fi, Firebase and device-account values. `secrets.h` is git-ignored.
+
+The leak rule (20% of F1's flow missing at F2 for 10 s) and the pump thresholds (on at 2 cm, off at 13 cm, in an 18 cm tank) are set in the firmware and mirrored in [`src/twin/config.js`](src/twin/config.js) and `PUMP_THRESHOLDS` in [`src/data/swampdsData.js`](src/data/swampdsData.js). Change them in all three places together.
 
 ## Develop
 
