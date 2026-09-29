@@ -49,15 +49,15 @@ const uint8_t FLOW_PINS[2] = {32, 33};                  // flow1 = nearest the p
 #define RELAY_ACTIVE_HIGH true                          // many relay boards are active-LOW: set false
 
 // ======================= Tunables — copy these from the twin's engine config =======================
-const float DELIVERY_HEIGHT_CM   = 100.0;
-const float SENSOR_TO_BOTTOM_CM  = 110.0;
+const float DELIVERY_HEIGHT_CM   = 9.5;
+const float SENSOR_TO_BOTTOM_CM  = 12.5;
 const float FLOW_K[2]            = {7.5, 7.5};   // pulses/s per L/min — calibrate each sensor
 const float TOLERANCE_PCT        = 20.0;         // flow loss between flow1/flow2 that counts as a leak
 const uint32_t PERSIST_SEC       = 10;
 const float MIN_FLOW_LPM         = 0.5;
-const float PUMP_ON_BELOW_PCT    = 30.0;
-const float PUMP_OFF_ABOVE_PCT   = 90.0;
-const float LOW_LEVEL_WARN_PCT   = 15.0;
+const float PUMP_ON_BELOW_PCT    = 0.0;
+const float PUMP_OFF_ABOVE_PCT   = 100.0;
+const float LOW_LEVEL_WARN_PCT   = 0.0;
 const uint32_t DRY_RUN_SEC       = 15;
 const float DRY_RUN_MIN_FLOW     = 0.3;
 const uint32_t DRY_RUN_HOLD_MS   = 60000;
