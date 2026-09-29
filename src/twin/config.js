@@ -5,10 +5,15 @@
  * (swampds_prototype_2flow.ino). Change them in both places together.
  */
 
-// Delivery tank geometry on the prototype, in cm (firmware: DELIVERY_HEIGHT_CM, PUMP_*_CM)
-export const TANK_HEIGHT_CM = 18;
-export const PUMP_ON_CM     = 2;
-export const PUMP_OFF_CM    = 13;   // leaves 5 cm below the ultrasonic sensor
+// Delivery tank geometry on the prototype, in cm (same names and values as the firmware).
+// The ultrasonic sensor sits inside the tank, so the highest level it can safely measure is
+// below the rim: 18 - 4.5 (sensor) - 3 (its ~2 cm blind zone + ripple) = 10.5 cm = 100 %.
+export const TANK_HEIGHT_CM      = 18;
+export const SENSOR_DROP_CM      = 4.5;
+export const SENSOR_CLEARANCE_CM = 3;
+export const FULL_SCALE_CM       = TANK_HEIGHT_CM - SENSOR_DROP_CM - SENSOR_CLEARANCE_CM; // 10.5
+export const PUMP_ON_CM          = 2;                   // 19 %
+export const PUMP_OFF_CM         = FULL_SCALE_CM - 0.5; // 10 cm = 95 %
 
 export const DEFAULT_CONFIG = {
   // Timing
@@ -19,7 +24,7 @@ export const DEFAULT_CONFIG = {
   maxLeakFraction: 0.6,    // share of upstream flow lost with a valve 100% open
   sourceCapacityL: 12,     // small demo tanks so a full cycle fits in a demo
   deliveryCapacityL: 6,
-  deliveryHeightCm: TANK_HEIGHT_CM, // used to report a water depth (cm) to the dashboard
+  deliveryHeightCm: FULL_SCALE_CM,  // depth (cm) at 100 %, used to report cm to the dashboard
 
   // Sensors
   noisePct: 1.5,           // random reading noise, +/- percent
@@ -31,8 +36,8 @@ export const DEFAULT_CONFIG = {
   persistSec: 10,          // abnormal difference must last this long to be a LEAK
 
   // Pump control
-  lowLevelPct: (PUMP_ON_CM / TANK_HEIGHT_CM) * 100,   // auto mode: pump ON at or below (2 cm = 11 %)
-  fullLevelPct: (PUMP_OFF_CM / TANK_HEIGHT_CM) * 100, // auto mode: pump OFF at or above (13 cm = 72 %)
+  lowLevelPct: (PUMP_ON_CM / FULL_SCALE_CM) * 100,   // auto mode: pump ON at or below (2 cm = 19 %)
+  fullLevelPct: (PUMP_OFF_CM / FULL_SCALE_CM) * 100, // auto mode: pump OFF at or above (10 cm = 95 %)
   sourceEmptyPct: 2,       // pump stops (dry-run protection) at or below this source level
 
   // Display

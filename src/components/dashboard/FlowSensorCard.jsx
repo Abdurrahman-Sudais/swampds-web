@@ -3,7 +3,7 @@ import { Activity } from 'lucide-react';
 import { Card, CardHeader } from '../Card';
 import { Sparkline } from '../Sparkline';
 
-const NORMAL_RANGE = { min: 4.4, max: 5.3 }; // L/min
+const TONE_CLASS = { ok: 'text-green-600', bad: 'text-red-600', idle: 'text-slate-400' };
 
 const SPARKLINE_POINTS = 30;
 
@@ -16,16 +16,17 @@ const SPARKLINE_POINTS = 30;
  *   iconColorClass: string,
  *   history: object[],
  *   historyKey: string,
+ *   status: {{ tone: 'ok'|'bad'|'idle', label: string }},
  * }} props
+ * `status` comes from flowSensorStatus() (Sensor 2 is judged against Sensor 1).
  * `history` is the recorded flow series from useChartHistory(); `historyKey` picks
  * this sensor's column (F1/F2).
  */
-export default function FlowSensorCard({ title, value, sublabel, color, iconColorClass, history = [], historyKey }) {
+export default function FlowSensorCard({ title, value, sublabel, color, iconColorClass, history = [], historyKey, status }) {
   const sparkData = useMemo(
     () => history.slice(-SPARKLINE_POINTS).map(p => ({ val: p[historyKey] })),
     [history, historyKey],
   );
-  const isNormal  = value >= NORMAL_RANGE.min && value <= NORMAL_RANGE.max;
 
   return (
     <Card>
@@ -36,9 +37,9 @@ export default function FlowSensorCard({ title, value, sublabel, color, iconColo
       </div>
       <div className="flex items-center gap-2 mt-1">
         <span className="text-xs font-semibold" style={{ color }}>{sublabel}</span>
-        <span className={`text-xs font-semibold ${isNormal ? 'text-green-600' : 'text-red-600'}`}>
-          {isNormal ? '· Normal' : '· Diverged'}
-        </span>
+        {status && (
+          <span className={`text-xs font-semibold ${TONE_CLASS[status.tone]}`}>· {status.label}</span>
+        )}
       </div>
       {sparkData.length >= 2
         ? <Sparkline data={sparkData} dataKey="val" color={color} />

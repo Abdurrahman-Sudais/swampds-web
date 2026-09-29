@@ -1,18 +1,16 @@
 import React from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ReferenceLine, ResponsiveContainer
+  ResponsiveContainer
 } from 'recharts';
 import { Activity, CheckCircle2, AlertTriangle, ShieldAlert } from 'lucide-react';
 import { Card, CardHeader } from '../components/Card';
 import ChartPlaceholder, { MIN_CHART_POINTS } from '../components/dashboard/ChartPlaceholder';
 import { useSwampdsData, useChartHistory } from '../data/swampdsData';
+import { flowSensorStatus, MIN_FLOW_LPM } from '../data/flowStatus';
 
-// Expected operating range for each flow sensor
-const FLOW_RANGE = { min: 4.4, max: 5.3 }; // L/min
-
-// Below this upstream flow the leak check is skipped (same value in the firmware and the twin)
-const MIN_FLOW_LPM = 0.5;
+const TONE_CLASS = { ok: 'text-green-600', bad: 'text-red-600', idle: 'text-slate-400' };
+const TONE_BADGE = { ok: 'bg-green-100 text-green-700', bad: 'bg-red-100 text-red-700', idle: 'bg-slate-100 text-slate-500' };
 
 const SENSOR_META = [
   {
@@ -40,8 +38,7 @@ const STATUS_EXPLANATIONS = {
 
 const TOOLTIP_STYLE = { borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' };
 
-function SensorSection({ sensorKey, dataKey, label, color, desc, value, chartData }) {
-  const isNormal = value >= FLOW_RANGE.min && value <= FLOW_RANGE.max;
+function SensorSection({ dataKey, label, color, desc, value, status, chartData }) {
   return (
     <Card>
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4 mb-4">
@@ -57,8 +54,8 @@ function SensorSection({ sensorKey, dataKey, label, color, desc, value, chartDat
             {(value ?? 0).toFixed(2)}{' '}
             <span className="text-xs text-slate-500 font-normal">L/min</span>
           </div>
-          <span className={`text-xs font-semibold sm:mt-1 inline-block ${isNormal ? 'text-green-600' : 'text-red-600'}`}>
-            {isNormal ? '✓ Normal' : '⚠ Diverged'}
+          <span className={`text-xs font-semibold sm:mt-1 inline-block ${TONE_CLASS[status.tone]}`}>
+            {status.label}
           </span>
         </div>
       </div>
@@ -70,10 +67,8 @@ function SensorSection({ sensorKey, dataKey, label, color, desc, value, chartDat
           <LineChart data={chartData} margin={{ top: 5, right: 15, left: -10, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
             <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11 }} minTickGap={35} />
-            <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11 }} domain={[0, 7]} />
+            <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11 }} domain={[0, 'auto']} />
             <Tooltip contentStyle={TOOLTIP_STYLE} formatter={v => [`${v} L/min`]} />
-            <ReferenceLine y={FLOW_RANGE.min} stroke="#e2e8f0" strokeDasharray="4 2" />
-            <ReferenceLine y={FLOW_RANGE.max} stroke="#e2e8f0" strokeDasharray="4 2" />
             <Line type="monotone" dataKey={dataKey} stroke={color} strokeWidth={2} dot={false} isAnimationActive={false} />
           </LineChart>
         </ResponsiveContainer>
@@ -121,8 +116,8 @@ export default function FlowSensorsPage() {
         {SENSOR_META.map(({ key, ...props }) => (
           <SensorSection
             key={key}
-            sensorKey={key}
             value={sensors[key]}
+            status={flowSensorStatus(key, sensors, detection)}
             chartData={flowData}
             {...props}
           />
@@ -134,15 +129,15 @@ export default function FlowSensorsPage() {
 
         {/* Live readings vs expected range */}
         <Card>
-          <CardHeader title="Live Readings vs Expected Range" icon={Activity} iconColorClass="text-slate-400" />
+          <CardHeader title="Live Readings" icon={Activity} iconColorClass="text-slate-400" />
           <p className="text-xs text-slate-400 mb-4">
-            Expected operating range: {FLOW_RANGE.min}–{FLOW_RANGE.max} L/min per sensor.
+            Sensor 2 is judged against Sensor 1, so no fixed flow rate is assumed.
           </p>
           <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
             <table className="w-full min-w-[380px] text-sm text-left">
               <thead>
                 <tr className="text-slate-500 border-b border-slate-100">
-                  {['Sensor', 'Expected range', 'Live reading', 'Status'].map(h => (
+                  {['Sensor', 'Position', 'Live reading', 'Status'].map(h => (
                     <th key={h} className="pb-3 font-medium pr-3 text-xs sm:text-sm">{h}</th>
                   ))}
                 </tr>
@@ -150,21 +145,21 @@ export default function FlowSensorsPage() {
               <tbody>
                 {SENSOR_META.map(({ key, label }) => {
                   const val = sensors[key] ?? 0;
-                  const ok  = val >= FLOW_RANGE.min && val <= FLOW_RANGE.max;
+                  const st  = flowSensorStatus(key, sensors, detection);
                   return (
                     <tr key={key} className="border-b border-slate-50 last:border-0 text-slate-700">
                       <td className="py-3 pr-3 font-medium text-xs leading-tight">
                         {label.split(' - ')[0]}
                       </td>
                       <td className="py-3 pr-3 text-slate-500 text-xs sm:text-sm">
-                        {FLOW_RANGE.min}–{FLOW_RANGE.max} L/min
+                        {label.split(' - ')[1]}
                       </td>
                       <td className="py-3 pr-3 font-mono font-semibold text-xs sm:text-sm">
                         {val.toFixed(2)} L/min
                       </td>
                       <td className="py-3">
-                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${ok ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                          {ok ? 'Normal' : 'Diverged'}
+                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full whitespace-nowrap ${TONE_BADGE[st.tone]}`}>
+                          {st.label}
                         </span>
                       </td>
                     </tr>

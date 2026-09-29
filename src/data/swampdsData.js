@@ -12,19 +12,20 @@
 import { useState, useEffect } from 'react';
 import { getDatabase, ref, onValue, set, query, orderByKey, limitToLast } from 'firebase/database';
 import { app } from '../firebase/firebaseConfig';
+import { FULL_SCALE_CM, PUMP_ON_CM, PUMP_OFF_CM } from '../twin/config.js';
 
 const db = getDatabase(app);
 
 /**
- * Auto-pump thresholds used by the firmware (PUMP_ON_BELOW_CM / PUMP_OFF_ABOVE_CM in an 18 cm tank).
- * Display values only - the web app does not enforce them. `low` / `full` are the same levels in %.
+ * Auto-pump thresholds used by the firmware (PUMP_ON_BELOW_CM / PUMP_OFF_ABOVE_CM), shared with
+ * the twin. Display values only - the web app does not enforce them. `low` / `full` are the same
+ * levels in %, where 100 % is the highest level the sensor can safely measure (FULL_SCALE_CM).
  */
-const TANK_CM = 18;
 export const PUMP_THRESHOLDS = {
-  lowCm: 2,
-  fullCm: 13,
-  low:  Math.round((2 / TANK_CM) * 100),   // 11 %
-  full: Math.round((13 / TANK_CM) * 100),  // 72 %
+  lowCm:  PUMP_ON_CM,                                   // 2 cm
+  fullCm: PUMP_OFF_CM,                                  // 10 cm
+  low:    Math.round((PUMP_ON_CM / FULL_SCALE_CM) * 100),  // 19 %
+  full:   Math.round((PUMP_OFF_CM / FULL_SCALE_CM) * 100), // 95 %
 };
 
 // Live store (populated by Firebase onValue)
