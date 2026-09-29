@@ -110,23 +110,9 @@ view-only.
   account's `roles/<uid>` to be `"admin"` - `auth != null` alone is not enough once
   roles are in use. The ESP32 signs in with its own account whose role is `"device"`; it
   may write only the nodes the firmware publishes (it also resets `control/pumpCommand`
-  after a dry-run or leak stop). `roles` itself is never writable from the client:
-  ```json
-  {
-    "rules": {
-      ".read": true,
-      "roles": { ".write": false },
-      ".write": "auth != null && root.child('roles').child(auth.uid).val() === 'admin'",
-      "sensors":     { ".write": "auth != null && root.child('roles').child(auth.uid).val() === 'device'" },
-      "system":      { ".write": "auth != null && root.child('roles').child(auth.uid).val() === 'device'" },
-      "hardware":    { ".write": "auth != null && root.child('roles').child(auth.uid).val() === 'device'" },
-      "twin":        { ".write": "auth != null && root.child('roles').child(auth.uid).val() === 'device'" },
-      "alerts":      { ".write": "auth != null && root.child('roles').child(auth.uid).val() === 'device'" },
-      "pumpHistory": { ".write": "auth != null && root.child('roles').child(auth.uid).val() === 'device'" },
-      "control":     { ".write": "auth != null && root.child('roles').child(auth.uid).val() === 'device'" }
-    }
-  }
-  ```
+  after a dry-run or leak stop). `roles` itself is never writable from the client.
+  The rules are in [`database.rules.json`](database.rules.json): paste its contents into
+  Firebase console → Realtime Database → **Rules** → Publish (or `firebase deploy --only database`).
   (Write rules add up down the tree: admins keep full write access through the root rule, and
   the per-node rules only add the device account.) Without the device entries the ESP32 signs in
   but every write it makes is rejected with "Permission denied".
