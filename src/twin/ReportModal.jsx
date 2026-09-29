@@ -105,9 +105,9 @@ export default function ReportModal({ open, onClose, sim, config, startedAt }) {
                 </div>
               </div>
               <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-700/60">
-                <span className="text-slate-400 uppercase text-[10px] font-medium">Valves A / B</span>
+                <span className="text-slate-400 uppercase text-[10px] font-medium">Valve A</span>
                 <div className="text-sm font-semibold font-mono text-slate-900 dark:text-white mt-0.5">
-                  {sim.valves.A}% / {sim.valves.B}%
+                  {sim.valves.A}%
                 </div>
               </div>
             </div>
@@ -141,13 +141,6 @@ export default function ReportModal({ open, onClose, sim, config, startedAt }) {
                     <td className="p-2.5">{SEGMENTS.A.label}</td>
                     <td className="p-2.5">{sim.segments.A.diffPct.toFixed(1)}%</td>
                     <td className={sim.segments.A.leak ? 'p-2.5 font-semibold text-rose-600' : 'p-2.5'}>{sim.segments.A.leak ? 'Leak' : 'OK'}</td>
-                  </tr>
-                  <tr>
-                    <td className="p-2.5 font-semibold">Sensor F3</td>
-                    <td className="p-2.5">{sim.flows.f3.toFixed(2)}</td>
-                    <td className="p-2.5">{SEGMENTS.B.label}</td>
-                    <td className="p-2.5">{sim.segments.B.diffPct.toFixed(1)}%</td>
-                    <td className={sim.segments.B.leak ? 'p-2.5 font-semibold text-rose-600' : 'p-2.5'}>{sim.segments.B.leak ? 'Leak' : 'OK'}</td>
                   </tr>
                 </tbody>
               </table>

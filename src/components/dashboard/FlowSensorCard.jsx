@@ -18,7 +18,7 @@ const SPARKLINE_POINTS = 30;
  *   historyKey: string,
  * }} props
  * `history` is the recorded flow series from useChartHistory(); `historyKey` picks
- * this sensor's column (F1/F2/F3).
+ * this sensor's column (F1/F2).
  */
 export default function FlowSensorCard({ title, value, sublabel, color, iconColorClass, history = [], historyKey }) {
   const sparkData = useMemo(

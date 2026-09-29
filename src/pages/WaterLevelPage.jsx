@@ -73,14 +73,14 @@ export default function WaterLevelPage() {
                 <TrendingDown className="w-4 h-4 text-red-500" />
                 <span className="text-sm font-medium text-slate-700">Pump ON threshold</span>
               </div>
-              <span className="font-bold text-red-600">≤ {THRESHOLDS.low}%</span>
+              <span className="font-bold text-red-600">≤ {THRESHOLDS.lowCm} cm ({THRESHOLDS.low}%)</span>
             </div>
             <div className="flex items-center justify-between p-3 bg-blue-50 rounded-xl border border-blue-100">
               <div className="flex items-center gap-2">
                 <TrendingUp className="w-4 h-4 text-blue-500" />
                 <span className="text-sm font-medium text-slate-700">Pump OFF threshold</span>
               </div>
-              <span className="font-bold text-blue-600">≥ {THRESHOLDS.full}%</span>
+              <span className="font-bold text-blue-600">≥ {THRESHOLDS.fullCm} cm ({THRESHOLDS.full}%)</span>
             </div>
           </div>
         </Card>

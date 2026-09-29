@@ -19,7 +19,9 @@ export default function SettingsPage() {
               <TrendingDown className="w-4 h-4 text-red-500" />
               Pump ON at or below
             </div>
-            <div className="text-3xl font-bold text-red-600 mt-2">{PUMP_THRESHOLDS.low}%</div>
+            <div className="text-3xl font-bold text-red-600 mt-2">
+              {PUMP_THRESHOLDS.lowCm} cm <span className="text-base font-semibold text-red-400">({PUMP_THRESHOLDS.low}%)</span>
+            </div>
             <p className="text-xs text-slate-500 mt-1.5 leading-snug">
               Pump starts automatically when the water level drops to this.
             </p>
@@ -30,7 +32,9 @@ export default function SettingsPage() {
               <TrendingUp className="w-4 h-4 text-blue-500" />
               Pump OFF at or above
             </div>
-            <div className="text-3xl font-bold text-blue-600 mt-2">{PUMP_THRESHOLDS.full}%</div>
+            <div className="text-3xl font-bold text-blue-600 mt-2">
+              {PUMP_THRESHOLDS.fullCm} cm <span className="text-base font-semibold text-blue-400">({PUMP_THRESHOLDS.full}%)</span>
+            </div>
             <p className="text-xs text-slate-500 mt-1.5 leading-snug">
               Pump stops automatically when the water level rises to this.
             </p>
@@ -40,8 +44,8 @@ export default function SettingsPage() {
         <div className="flex items-start gap-2 p-3 mt-5 rounded-xl bg-slate-50 border border-slate-200 text-slate-600 text-xs sm:text-sm">
           <Info className="w-4 h-4 flex-shrink-0 mt-0.5" />
           <span>
-            These values are read-only. This dashboard only displays them - changing them here
-            would not change what the pump control acts on.
+            These values are set in the device firmware (water depth in an 18 cm tank; the pump stops at
+            13 cm to keep water clear of the level sensor). This dashboard only displays them.
           </span>
         </div>
       </Card>

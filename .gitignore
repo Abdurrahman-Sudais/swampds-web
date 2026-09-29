@@ -27,3 +27,6 @@ dist-ssr
 .env
 .env.local
 .env.*.local
+
+# Firmware credentials (see secrets.example.h)
+secrets.h
