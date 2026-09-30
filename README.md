@@ -57,7 +57,7 @@ Tank: 18 cm tall, the ultrasonic sensor sits 4.5 cm below the rim, and it needs 
 
 Before first power-on with the pump connected, check:
 - **Relay polarity** (`RELAY_ACTIVE_HIGH`): with the pump unplugged, boot the board; the relay must stay off (LED off, no click). If it switches on, set it to `false`.
-- **Flow sensor K-factor** (`FLOW_K`, pulses per second per L/min): 7.5 is the YF-S201. Check it by running water into a measuring jug for 60 s and comparing with the reported L/min.
+- **Flow sensors** are YF-S201 (`FLOW_K` = 7.5 pulses per second per L/min, from the datasheet). Individual sensors can be off by up to ~10%, so check each one: run water into a measuring jug for 60 s and compare the litres with the reported L/min. The YF-S201 needs 5 V power and its signal wire then pulses at 5 V, so put a voltage divider (e.g. 10 kΩ / 20 kΩ) between the signal wire and GPIO 32/33.
 - **Signal voltage**: the ESP32 inputs take 3.3 V. A 5 V HC-SR04 echo pin and 5 V flow-sensor outputs need a voltage divider (or 3.3 V-tolerant modules).
 
 ## Develop

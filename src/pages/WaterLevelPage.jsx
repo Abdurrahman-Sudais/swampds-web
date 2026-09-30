@@ -1,13 +1,15 @@
 import React from 'react';
 import { Droplets, TrendingUp, TrendingDown } from 'lucide-react';
 import { Card, CardHeader } from '../components/Card';
-import { WaterLevelIndicator } from '../components/WaterLevelIndicator';
+import TankGauge from '../components/TankGauge';
+import { useDashboardTankStyle } from '../components/tankStyle';
 import WaterLevelChart from '../components/dashboard/WaterLevelChart';
 import { useSwampdsData, useChartHistory, PUMP_THRESHOLDS as THRESHOLDS } from '../data/swampdsData';
 
 export default function WaterLevelPage() {
-  const { sensors } = useSwampdsData();
+  const { sensors, status } = useSwampdsData();
   const { waterLevelData } = useChartHistory();
+  const [tankStyle] = useDashboardTankStyle();
 
   const { waterLevelPercent: pct, waterLevelCm: cm, lastUpdated } = sensors;
 
@@ -40,7 +42,7 @@ export default function WaterLevelPage() {
               </div>
             </div>
             <div className="mr-1 sm:mr-2 flex-shrink-0">
-              <WaterLevelIndicator percent={pct} className="w-20 h-36 sm:w-24 sm:h-40" />
+              <TankGauge percent={pct} style={tankStyle} active={status.pumpStatus === 'on'} className="w-20 h-36 sm:w-24 sm:h-40" />
             </div>
           </div>
         </Card>
