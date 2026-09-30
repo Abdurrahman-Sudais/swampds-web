@@ -58,7 +58,9 @@ The leak rule (20% of F1's flow missing at F2 for 10 s) and the tank settings ar
 Tank: 18 cm tall, the ultrasonic sensor sits 4.5 cm below the rim, and it needs ~3 cm of clearance, so the highest safe level is 10.5 cm (= 100%). By default auto mode starts the pump at 2 cm (19%) and stops it at 10 cm (95%); admins can change both on the Settings page within the safe limits, and the ESP32 picks the change up within ~10 s.
 
 Before first power-on with the pump connected, check:
-- **Relay polarity** (`RELAY_ACTIVE_HIGH`): with the pump unplugged, boot the board; the relay must stay off (LED off, no click). If it switches on, set it to `false`.
+- **Relay**: a 1-channel LOW-level-trigger module (`RELAY_ACTIVE_HIGH` is `false`: IN pulled LOW = relay on). Wire the pump through the **NO** (normally open) terminal, so the pump only runs while the relay is energised. With the pump unplugged, boot the board: the relay must stay off (LED off, no click), then use Start/Stop in manual mode to hear it switch.
+  - Power the relay module's VCC from the **same supply as the ESP32**. With a low-trigger module, an ESP32 that loses power while the relay still has 5 V pulls IN low and switches the pump on; a shared supply makes both go off together.
+  - If the relay stays on (or its LED glows faintly) when it should be off, the ESP32's 3.3 V "off" level is not enough for a 5 V module: power the module's VCC from 3.3 V if it is rated for it, or drive IN through a small transistor.
 - **Flow sensors** are YF-S201 (`FLOW_K` = 7.5 pulses per second per L/min, from the datasheet). Individual sensors can be off by up to ~10%, so check each one: run water into a measuring jug for 60 s and compare the litres with the reported L/min. The YF-S201 needs 5 V power and its signal wire then pulses at 5 V, so put a voltage divider (e.g. 10 kΩ / 20 kΩ) between the signal wire and GPIO 32/33.
 - **Signal voltage**: the ESP32 inputs take 3.3 V. A 5 V HC-SR04 echo pin and 5 V flow-sensor outputs need a voltage divider (or 3.3 V-tolerant modules).
 
