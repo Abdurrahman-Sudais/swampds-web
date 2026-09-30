@@ -52,7 +52,7 @@ const uint8_t FLOW_PINS[2] = {32, 33};                  // flow1 = nearest the p
 #define PIN_LED_RED 26
 #define PIN_LED_YELLOW 27
 #define PIN_BUZZER 14
-#define RELAY_ACTIVE_HIGH true                          // many relay boards are active-LOW: set false
+#define RELAY_ACTIVE_HIGH false                         // 1-channel LOW-level-trigger module: IN pulled LOW = relay ON
 
 // ======================= Tunables — keep in step with src/twin/config.js and PUMP_THRESHOLDS =======================
 // Delivery tank geometry. Only the first three are measured; the rest follow from them.
@@ -427,6 +427,9 @@ void announceBoot() {
 void setup() {
   Serial.begin(115200);
 
+  // Set the "off" level BEFORE making the pin an output: a new output starts LOW, which on a
+  // low-level-trigger relay would click the pump on for a moment at every boot.
+  digitalWrite(PIN_RELAY, RELAY_ACTIVE_HIGH ? LOW : HIGH);
   pinMode(PIN_RELAY, OUTPUT);
   digitalWrite(PIN_RELAY, RELAY_ACTIVE_HIGH ? LOW : HIGH);
   pinMode(PIN_LED_GREEN, OUTPUT); pinMode(PIN_LED_YELLOW, OUTPUT); pinMode(PIN_LED_RED, OUTPUT);
