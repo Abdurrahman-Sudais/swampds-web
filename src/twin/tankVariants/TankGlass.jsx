@@ -7,7 +7,7 @@ const clamp = (v, lo = 0, hi = 100) => Math.min(hi, Math.max(lo, v));
  * closer to a physical sight-glass than the other variants: more "instrument",
  * less "cartoon water".
  */
-export function TankGlassFragment({ percent, w = 76, h = 150 }) {
+export function TankGlassFragment({ percent, showLabel = true, w = 76, h = 150 }) {
   const id = useId();
   const pct = clamp(percent);
   const fillH = (pct / 100) * (h - 6);
@@ -45,10 +45,12 @@ export function TankGlassFragment({ percent, w = 76, h = 150 }) {
       <rect x="1" y="1" width={w - 2} height={h - 2} rx={radius} fill="none"
         className="stroke-slate-300 dark:stroke-slate-700" strokeWidth="2" />
 
-      <text x={w / 2 - Math.max(4, w * 0.08)} y={h / 2 + 5} textAnchor="middle" fontSize={Math.max(9, w * 0.19)} fontWeight="700"
-        className="fill-slate-800 dark:fill-slate-100 font-mono" style={{ paintOrder: 'stroke', stroke: 'white', strokeWidth: 3, strokeOpacity: 0.5 }}>
-        {Math.round(pct)}%
-      </text>
+      {showLabel && (
+        <text x={w / 2 - Math.max(4, w * 0.08)} y={h / 2 + 5} textAnchor="middle" fontSize={Math.max(9, w * 0.19)} fontWeight="700"
+          className="fill-slate-800 dark:fill-slate-100 font-mono" style={{ paintOrder: 'stroke', stroke: 'white', strokeWidth: 3, strokeOpacity: 0.5 }}>
+          {Math.round(pct)}%
+        </text>
+      )}
     </>
   );
 }

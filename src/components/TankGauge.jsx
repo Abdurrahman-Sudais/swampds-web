@@ -8,7 +8,8 @@ const W = 64;
 const H = 112;
 
 /**
- * Water-level gauge in the chosen style.
+ * Water-level gauge in the chosen style. No number inside the tank: the dashboard shows the
+ * reading next to it, and a bare gauge reads as more professional.
  * @param {{ percent: number, style: string, active?: boolean, className?: string }} props
  *   active: pump running (some styles animate more while water flows in)
  */
@@ -16,7 +17,7 @@ export default function TankGauge({ percent, style, active = false, className = 
   if (style === 'classic') return <WaterLevelIndicator percent={percent} className={className} />;
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className={`${className} flex-shrink-0`} role="img" aria-label={`Tank ${Math.round(percent)}% full`}>
-      {React.createElement(getTankFragment(style), { percent, active, w: W, h: H })}
+      {React.createElement(getTankFragment(style), { percent, active, w: W, h: H, showLabel: false })}
     </svg>
   );
 }

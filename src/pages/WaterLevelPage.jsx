@@ -4,10 +4,10 @@ import { Card, CardHeader } from '../components/Card';
 import TankGauge from '../components/TankGauge';
 import { useDashboardTankStyle } from '../components/tankStyle';
 import WaterLevelChart from '../components/dashboard/WaterLevelChart';
-import { useSwampdsData, useChartHistory, PUMP_THRESHOLDS as THRESHOLDS } from '../data/swampdsData';
+import { useSwampdsData, useChartHistory } from '../data/swampdsData';
 
 export default function WaterLevelPage() {
-  const { sensors, status } = useSwampdsData();
+  const { sensors, status, thresholds: THRESHOLDS } = useSwampdsData();
   const { waterLevelData } = useChartHistory();
   const [tankStyle] = useDashboardTankStyle();
 

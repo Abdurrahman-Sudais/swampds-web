@@ -6,27 +6,28 @@
  *                      readings recorded here as they arrive (Firebase keeps no history)
  * sendPumpCommand(cmd) write "on" | "off" to the pump command
  * setControlMode(mode) write "auto" | "manual" to the control mode
+ * setPumpThresholds()  admin: write the auto-pump ON/OFF levels (cm) to config/
  * usePumpHistory()     pump on/off session log
  */
 
 import { useState, useEffect } from 'react';
-import { getDatabase, ref, onValue, set, query, orderByKey, limitToLast } from 'firebase/database';
+import { getDatabase, ref, onValue, set, update, query, orderByKey, limitToLast } from 'firebase/database';
 import { app } from '../firebase/firebaseConfig';
-import { FULL_SCALE_CM, PUMP_ON_CM, PUMP_OFF_CM } from '../twin/config.js';
+import { PUMP_ON_CM, PUMP_OFF_CM, validatePumpThresholds, levelPct } from '../twin/config.js';
 
 const db = getDatabase(app);
 
 /**
- * Auto-pump thresholds used by the firmware (PUMP_ON_BELOW_CM / PUMP_OFF_ABOVE_CM), shared with
- * the twin. Display values only - the web app does not enforce them. `low` / `full` are the same
- * levels in %, where 100 % is the highest level the sensor can safely measure (FULL_SCALE_CM).
+ * Auto-pump thresholds in force: the admin-set values in config/ when they are valid, otherwise
+ * the firmware defaults. `low` / `full` are the same levels in %, where 100 % is the highest
+ * level the sensor can safely measure.
  */
-export const PUMP_THRESHOLDS = {
-  lowCm:  PUMP_ON_CM,                                   // 2 cm
-  fullCm: PUMP_OFF_CM,                                  // 10 cm
-  low:    Math.round((PUMP_ON_CM / FULL_SCALE_CM) * 100),  // 19 %
-  full:   Math.round((PUMP_OFF_CM / FULL_SCALE_CM) * 100), // 95 %
-};
+function _thresholds(config) {
+  const custom = validatePumpThresholds(config?.pumpOnCm, config?.pumpOffCm) === null;
+  const lowCm  = custom ? config.pumpOnCm  : PUMP_ON_CM;
+  const fullCm = custom ? config.pumpOffCm : PUMP_OFF_CM;
+  return { lowCm, fullCm, low: Math.round(levelPct(lowCm)), full: Math.round(levelPct(fullCm)), custom };
+}
 
 // Live store (populated by Firebase onValue)
 
@@ -42,6 +43,9 @@ const initialData = {
   // Leak rule in use, as published by the device or twin (twin/tolerancePct, twin/persistSec).
   // Null until something publishes it.
   detection: { tolerancePct: null, persistSec: null },
+  thresholds: _thresholds(null),
+  // What the ESP32 reports it is actually using (hardware/pumpOnCm, pumpOffCm); null without hardware
+  deviceThresholds: null,
   loaded:  false, // true once the first real Firebase snapshot has arrived
   // Where the data comes from. `receivedAt` is the LOCAL time the heartbeat (sensors/lastUpdated)
   // last changed, so staleness does not depend on the publisher's clock being right.
@@ -61,7 +65,7 @@ const _notify = (snapshot) => {
 // on each 1-2 s sensor update, which gets slower the longer the system runs.
 
 const ALERTS_SHOWN = 10;
-const _raw = { sensors: null, system: null, status: null, control: null, twin: null, alerts: null };
+const _raw = { sensors: null, system: null, status: null, control: null, twin: null, config: null, hardware: null, alerts: null };
 const _seen = new Set(); // nodes whose first snapshot has arrived
 
 function _rebuild() {
@@ -107,6 +111,10 @@ function _rebuild() {
       tolerancePct: Number.isFinite(_raw.twin?.tolerancePct) ? _raw.twin.tolerancePct : null,
       persistSec:   Number.isFinite(_raw.twin?.persistSec)   ? _raw.twin.persistSec   : null,
     },
+    thresholds: _thresholds(_raw.config),
+    deviceThresholds: Number.isFinite(_raw.hardware?.pumpOnCm) && Number.isFinite(_raw.hardware?.pumpOffCm)
+      ? { lowCm: _raw.hardware.pumpOnCm, fullCm: _raw.hardware.pumpOffCm }
+      : null,
     loaded: _seen.size > 0,
     meta,
   });
@@ -208,7 +216,7 @@ function _recordSample(sensors) {
   if (now - _lastSave >= SAVE_EVERY_MS) _save();
 }
 
-for (const key of ['sensors', 'system', 'status', 'control', 'twin']) _listen(key, ref(db, key));
+for (const key of ['sensors', 'system', 'status', 'control', 'twin', 'config', 'hardware']) _listen(key, ref(db, key));
 // Push keys sort by creation time, so the last N keys are the newest alerts (no index needed)
 _listen('alerts', query(ref(db, 'alerts'), orderByKey(), limitToLast(ALERTS_SHOWN)));
 
@@ -257,6 +265,22 @@ export function sendPumpCommand(command) {
  */
 export function setControlMode(mode) {
   set(ref(db, 'status/controlMode'), mode);
+}
+
+/**
+ * Admin only: set the auto-pump ON/OFF water levels (cm). Checked here and again by the database
+ * rules and the firmware, so an unsafe pair is refused rather than sent to the pump.
+ * @returns {Promise<void>} rejects with a readable message if the pair is not allowed or the write fails
+ */
+export async function setPumpThresholds(onCm, offCm) {
+  const problem = validatePumpThresholds(onCm, offCm);
+  if (problem) throw new Error(problem);
+  await update(ref(db, 'config'), { pumpOnCm: onCm, pumpOffCm: offCm });
+}
+
+/** Admin only: go back to the firmware's default levels. */
+export async function resetPumpThresholds() {
+  await set(ref(db, 'config'), null);
 }
 
 /**

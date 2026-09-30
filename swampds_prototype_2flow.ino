@@ -65,8 +65,14 @@ const float FLOW_K[2]            = {7.5, 7.5};   // YF-S201: 7.5 pulses/s per L/
 const float TOLERANCE_PCT        = 20.0;         // flow loss between flow1/flow2 that counts as a leak
 const uint32_t PERSIST_SEC       = 10;
 const float MIN_FLOW_LPM         = 0.5;
+// Auto-mode pump levels. These are the DEFAULTS: admins can change them from the dashboard's
+// Settings page (config/pumpOnCm, config/pumpOffCm), within the limits below. The same limits
+// are enforced by the database rules and src/twin/config.js (PUMP_LIMITS).
 const float PUMP_ON_BELOW_CM     = 2.0;                        // auto: pump ON at or below this water depth (19 %)
 const float PUMP_OFF_ABOVE_CM    = DELIVERY_HEIGHT_CM - 0.5;   // auto: pump OFF at 10 cm (95 %); 0.5 cm for water still in the pipe
+const float MIN_PUMP_ON_CM       = 1.5;                        // limit: ON no lower than this (above the low-level warning)
+const float MAX_PUMP_OFF_CM      = PUMP_OFF_ABOVE_CM;          // limit: OFF no higher than the safe level
+const float MIN_PUMP_GAP_CM      = 2.0;                        // limit: OFF at least this far above ON (no rapid cycling)
 const float LOW_LEVEL_WARN_CM    = 1.0;          // warning below this depth (pump should have started at 2 cm)
 const uint32_t DRY_RUN_SEC       = 15;
 const float DRY_RUN_MIN_FLOW     = 0.3;
@@ -74,6 +80,7 @@ const uint32_t DRY_RUN_HOLD_MS   = 60000;
 const uint8_t SENSOR_FAULT_AFTER = 5;
 
 const uint32_t PUBLISH_MS = 2000;
+const uint32_t CONFIG_POLL_MS = 10000;                         // how often admin-set levels are re-read
 
 // ======================= Globals =======================
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
@@ -91,6 +98,10 @@ float flow[2] = {0, 0};
 float levelPct = 0, levelCm = 0;
 uint8_t badReads = 0;
 bool sensorFault = false;
+
+float pumpOnCm  = PUMP_ON_BELOW_CM;    // levels in force (defaults until config/ is read)
+float pumpOffCm = PUMP_OFF_ABOVE_CM;
+uint32_t lastConfigPoll = 0;
 
 bool pumpOn = false;
 uint32_t pumpOnSince = 0;
@@ -248,8 +259,8 @@ void checkDryRun(uint32_t now) {
 void runPumpControl(uint32_t now) {
   if (modeAuto) {
     bool blocked = sensorFault || leakA || holdActive(now);
-    if (pumpOn && (levelCm >= PUMP_OFF_ABOVE_CM || blocked)) setPump(false);
-    else if (!pumpOn && !blocked && levelCm <= PUMP_ON_BELOW_CM) setPump(true);
+    if (pumpOn && (levelCm >= pumpOffCm || blocked)) setPump(false);
+    else if (!pumpOn && !blocked && levelCm <= pumpOnCm) setPump(true);
   } else if (leakA) {
     // Leak protection overrides manual mode (same as the twin). Drop the command too, so the
     // pump does not restart by itself once the leak is cleared by switching modes.
@@ -257,6 +268,34 @@ void runPumpControl(uint32_t now) {
     if (manualCommand != "off") { manualCommand = "off"; writePumpCommand("off"); }
   } else {
     setPump(manualCommand == "on");
+  }
+}
+
+// Admin-set levels from config/. Anything missing or outside the safe limits falls back to the
+// defaults, so a bad value can never reach the pump. On a read error the current levels are kept.
+void pollConfig() {
+  if (!Firebase.ready()) return;
+  if (!Firebase.RTDB.get(&fbdoWrite, "config")) { Serial.println(fbdoWrite.errorReason()); return; }
+
+  float on = PUMP_ON_BELOW_CM, off = PUMP_OFF_ABOVE_CM;
+  if (fbdoWrite.dataType() == "json") {
+    FirebaseJson *j = fbdoWrite.to<FirebaseJson *>();
+    FirebaseJsonData a, b;
+    j->get(a, "pumpOnCm");
+    j->get(b, "pumpOffCm");
+    if (a.success && b.success) {
+      float wantOn = a.to<float>(), wantOff = b.to<float>();
+      if (wantOn >= MIN_PUMP_ON_CM && wantOff <= MAX_PUMP_OFF_CM && wantOff - wantOn >= MIN_PUMP_GAP_CM - 0.01f) {
+        on = wantOn; off = wantOff;
+      } else {
+        Serial.printf("config: %.1f/%.1f cm is outside the safe limits, using defaults\n", wantOn, wantOff);
+      }
+    }
+  }
+  if (on != pumpOnCm || off != pumpOffCm) {
+    pumpOnCm = on; pumpOffCm = off;
+    pushAlert("info", "Auto pump levels now ON at " + String(on, 1) + " cm, OFF at " + String(off, 1) + " cm.");
+    snapshotDue = true;
   }
 }
 
@@ -362,6 +401,8 @@ void publishSnapshot() {
 
   root.set("hardware/deviceId", DEVICE_ID);
   root.set("hardware/firmware", FW_VERSION);
+  root.set("hardware/pumpOnCm", pumpOnCm);     // levels actually in force, so the dashboard can confirm a change
+  root.set("hardware/pumpOffCm", pumpOffCm);
   root.set("hardware/lastSeen/.sv", "timestamp");
 
   if (Firebase.RTDB.updateNode(&fbdoWrite, "/", &root)) {
@@ -451,6 +492,11 @@ void loop() {
     updateDisplay();
   }
   updateBuzzer();
+
+  if (streamsStarted && (lastConfigPoll == 0 || now - lastConfigPoll >= CONFIG_POLL_MS)) {
+    lastConfigPoll = now ? now : 1;
+    pollConfig();
+  }
 
   if (snapshotDue || now - lastPublish >= PUBLISH_MS) publishSnapshot();
 }
