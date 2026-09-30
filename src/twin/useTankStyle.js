@@ -2,33 +2,34 @@ import { useState, useEffect, useCallback } from 'react';
 import { TANK_STYLES, DEFAULT_TANK_STYLE } from './tankVariants/index.js';
 
 const STORAGE_KEY = 'swampds_tank_style';
-const VALID_IDS = new Set(TANK_STYLES.map((s) => s.id));
 
-function readStored() {
+function readStored(key, validIds, fallback) {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved && VALID_IDS.has(saved)) return saved;
+    const saved = localStorage.getItem(key);
+    if (saved && validIds.has(saved)) return saved;
   } catch { /* storage unavailable */ }
-  return DEFAULT_TANK_STYLE;
+  return fallback;
 }
 
-function writeStored(id) {
-  try { localStorage.setItem(STORAGE_KEY, id); } catch { /* ignore */ }
+function writeStored(key, id) {
+  try { localStorage.setItem(key, id); } catch { /* ignore */ }
 }
 
 /**
  * The viewer's chosen tank animation style (source/delivery tanks on the pipeline
- * schematic), persisted across visits in this browser.
+ * schematic), persisted across visits in this browser. The dashboard passes its own
+ * key and style list (which adds its original "Classic" gauge).
  * @returns {[string, (id: string) => void]}
  */
-export function useTankStyle() {
-  const [style, setStyle] = useState(readStored);
+export function useTankStyle(key = STORAGE_KEY, styles = TANK_STYLES, fallback = DEFAULT_TANK_STYLE) {
+  const [validIds] = useState(() => new Set(styles.map((s) => s.id)));
+  const [style, setStyle] = useState(() => readStored(key, validIds, fallback));
 
-  useEffect(() => { writeStored(style); }, [style]);
+  useEffect(() => { writeStored(key, style); }, [key, style]);
 
   const choose = useCallback((id) => {
-    if (VALID_IDS.has(id)) setStyle(id);
-  }, []);
+    if (validIds.has(id)) setStyle(id);
+  }, [validIds]);
 
   return [style, choose];
 }

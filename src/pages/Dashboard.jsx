@@ -32,7 +32,7 @@ export default function Dashboard() {
 
       {/* 2 - KPI cards row: 1 col on mobile, 2 col on tablet, 4 col on desktop */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-        <WaterLevelCard percent={sensors.waterLevelPercent} cm={sensors.waterLevelCm} />
+        <WaterLevelCard percent={sensors.waterLevelPercent} cm={sensors.waterLevelCm} active={status.pumpStatus === 'on'} />
 
         {FLOW_SENSORS.map(({ key, ...props }) => (
           <FlowSensorCard key={key} value={sensors[key]} history={flowData} status={flowSensorStatus(key, sensors, detection)} {...props} />

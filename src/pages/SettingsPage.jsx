@@ -1,11 +1,26 @@
 import React from 'react';
-import { Settings, Info, TrendingDown, TrendingUp } from 'lucide-react';
+import { Settings, Info, TrendingDown, TrendingUp, Droplets } from 'lucide-react';
 import { Card, CardHeader } from '../components/Card';
 import { PUMP_THRESHOLDS } from '../data/swampdsData';
+import TankGauge, { TankStylePicker } from '../components/TankGauge';
+import { useDashboardTankStyle } from '../components/tankStyle';
 
 export default function SettingsPage() {
+  const [tankStyle, setTankStyle] = useDashboardTankStyle();
+
   return (
     <div className="space-y-6 max-w-2xl">
+
+      <Card>
+        <CardHeader title="Tank Style" icon={Droplets} iconColorClass="text-blue-500" />
+        <p className="text-xs sm:text-sm text-slate-500 mb-4 leading-relaxed">
+          How the water tank is drawn on the dashboard and Water Level page. Saved in this browser only.
+        </p>
+        <div className="flex items-center gap-5">
+          <TankGauge percent={60} style={tankStyle} active />
+          <TankStylePicker value={tankStyle} onChange={setTankStyle} />
+        </div>
+      </Card>
 
       <Card>
         <CardHeader title="Automatic Control Thresholds" icon={Settings} iconColorClass="text-blue-500" />
