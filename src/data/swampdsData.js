@@ -290,10 +290,10 @@ export async function resetPumpThresholds() {
  * Expected Firebase shape per entry:
  *   { date: "Sep 08 2026", start: "10:25 AM", end: "10:45 AM", duration: "20m 0s", startTimestamp: 1234567890 }
  *
- * @returns {{ date: string, start: string, end: string, duration: string }[]}
+ * @returns {{ date: string, start: string, end: string, duration: string }[] | null} null while loading
  */
 export function usePumpHistory() {
-  const [history, setHistory] = useState([]);
+  const [history, setHistory] = useState(null); // null until the first snapshot arrives
 
   useEffect(() => {
     const historyRef = ref(db, 'pumpHistory');

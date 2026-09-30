@@ -2,6 +2,7 @@ import React from 'react';
 import { Activity, History, CheckCircle2 } from 'lucide-react';
 import { Card, CardHeader } from '../components/Card';
 import { usePumpHistory, useSwampdsData } from '../data/swampdsData';
+import { TableRowsSkeleton } from '../components/skeleton/Skeleton';
 
 export default function PumpingHistory() {
   const history = usePumpHistory();
@@ -24,12 +25,14 @@ export default function PumpingHistory() {
           <CardHeader title="Pumping Session Log" icon={History} />
           <div className="flex items-center justify-between mb-4">
             <p className="text-xs text-slate-400">All recorded pump on/off sessions.</p>
-            {history.length > 0 && (
+            {history?.length > 0 && (
               <span className="text-[11px] text-slate-400 sm:hidden">Scroll table →</span>
             )}
           </div>
 
-          {history.length === 0 ? (
+          {history === null ? (
+            <TableRowsSkeleton rows={5} />
+          ) : history.length === 0 ? (
             <div className="py-10 text-center text-slate-400">
               <History className="w-8 h-8 mx-auto mb-3 opacity-30" />
               <p className="text-sm font-medium">No sessions logged yet</p>
