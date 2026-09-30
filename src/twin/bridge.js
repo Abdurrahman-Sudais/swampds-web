@@ -9,7 +9,7 @@
 
 import {
   toSnapshot, flatten, shouldPublishEvent, eventToAlert, connectionAlert,
-  createPumpTracker, trackPump, controlIntents, canAcquireLock,
+  createPumpTracker, trackPump, controlIntents, canAcquireLock, pumpLevelsFromDb,
   PUBLISH_INTERVAL_MS,
 } from './contract.js';
 
@@ -24,6 +24,7 @@ const norm = (v) => (typeof v === 'string' ? v.toLowerCase() : null);
  *   getSim: () => object,                 latest engine state
  *   getConfig: () => object,
  *   applyIntent: (intent: object) => void,   apply a dashboard command to the twin
+ *   applyConfig?: (patch: object) => void,   apply admin-set pump levels (config/) to the twin
  *   onStatus: (status: object) => void,
  *   now?: () => number,
  *   setIntervalFn?: Function, clearIntervalFn?: Function,
@@ -31,7 +32,7 @@ const norm = (v) => (typeof v === 'string' ? v.toLowerCase() : null);
  */
 export function createBridge(deps) {
   const {
-    api, db, clientId, identity, getSim, getConfig, applyIntent, onStatus,
+    api, db, clientId, identity, getSim, getConfig, applyIntent, applyConfig = () => {}, onStatus,
     now = Date.now, setIntervalFn = setInterval, clearIntervalFn = clearInterval,
   } = deps;
   const { ref, update, push, remove, onValue, runTransaction, onDisconnect } = api;
@@ -47,6 +48,7 @@ export function createBridge(deps) {
   let tracker = createPumpTracker();
   let offlineHandler = null;
   const dbControl = { mode: null, cmd: null }; // what the database currently holds
+  let dbConfig = null;                         // latest config/ (admin-set pump levels)
 
   const status = (state, extra = {}) => onStatus({ state, ...extra });
 
@@ -103,6 +105,10 @@ export function createBridge(deps) {
           dbControl.cmd = norm(snap.val());
           if (running) controlIntents(getSim(), { pumpCommand: snap.val() }).forEach(applyIntent);
         }),
+        onValue(ref(db, 'config'), (snap) => {
+          dbConfig = snap.val();
+          if (running) applyConfig(pumpLevelsFromDb(dbConfig));
+        }),
         onValue(lockRef, (snap) => {
           const lock = snap.val();
           if (running && lock && lock.clientId !== clientId) {
@@ -113,6 +119,7 @@ export function createBridge(deps) {
       ];
 
       running = true;
+      applyConfig(pumpLevelsFromDb(dbConfig)); // the levels already set before this twin connected
       logConnection('connected', t); // visible on the dashboard: an alert, not just the "simulated data" banner
       await publish();
       timer = setIntervalFn(() => { publish().catch(fail); }, PUBLISH_INTERVAL_MS);

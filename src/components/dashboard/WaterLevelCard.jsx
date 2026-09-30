@@ -3,7 +3,7 @@ import { Droplets, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { Card, CardHeader } from '../Card';
 import TankGauge from '../TankGauge';
 import { useDashboardTankStyle } from '../tankStyle';
-import { PUMP_THRESHOLDS as THRESHOLDS } from '../../data/swampdsData';
+import { useSwampdsData } from '../../data/swampdsData';
 
 /**
  * @param {{ percent: number, cm: number, active?: boolean }} props
@@ -11,6 +11,7 @@ import { PUMP_THRESHOLDS as THRESHOLDS } from '../../data/swampdsData';
  */
 export default function WaterLevelCard({ percent, cm, active = false }) {
   const [tankStyle] = useDashboardTankStyle();
+  const { thresholds: THRESHOLDS } = useSwampdsData();
   const status =
     percent >= THRESHOLDS.full
       ? { label: 'Tank Full', color: 'text-blue-600', Icon: CheckCircle2 }

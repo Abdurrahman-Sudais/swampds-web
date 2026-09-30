@@ -43,6 +43,8 @@ Defined in [`src/twin/contract.js`](src/twin/contract.js). Real hardware should 
 | `pumpHistory/<id>` | device | `{ date, start, end, duration, startTimestamp }` |
 | `status/controlMode` | dashboard | `auto` \| `manual` |
 | `control/pumpCommand` | dashboard | `on` \| `off` (manual mode only) |
+| `config/pumpOnCm`, `pumpOffCm` | dashboard (admins, Settings page) | auto-pump levels in cm; absent = firmware defaults (2 / 10). Limits: ON ≥ 1.5, OFF ≤ 10, OFF ≥ ON + 2 - enforced by the Settings page, the database rules and the firmware |
+| `hardware/pumpOnCm`, `pumpOffCm` | device | the levels the ESP32 is actually using, so Settings can confirm a change took effect |
 | `twinLock` | twin | single-publisher lock |
 
 ## Firmware
@@ -53,7 +55,7 @@ Arduino IDE: the sketch must be in a folder named `swampds_prototype_2flow` (wit
 
 The leak rule (20% of F1's flow missing at F2 for 10 s) and the tank settings are set in the firmware and mirrored in [`src/twin/config.js`](src/twin/config.js), which the dashboard also reads. Change both together.
 
-Tank: 18 cm tall, the ultrasonic sensor sits 4.5 cm below the rim, and it needs ~3 cm of clearance, so the highest safe level is 10.5 cm (= 100%). Auto mode starts the pump at 2 cm (19%) and stops it at 10 cm (95%).
+Tank: 18 cm tall, the ultrasonic sensor sits 4.5 cm below the rim, and it needs ~3 cm of clearance, so the highest safe level is 10.5 cm (= 100%). By default auto mode starts the pump at 2 cm (19%) and stops it at 10 cm (95%); admins can change both on the Settings page within the safe limits, and the ESP32 picks the change up within ~10 s.
 
 Before first power-on with the pump connected, check:
 - **Relay polarity** (`RELAY_ACTIVE_HIGH`): with the pump unplugged, boot the board; the relay must stay off (LED off, no click). If it switches on, set it to `false`.

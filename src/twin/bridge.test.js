@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { DEFAULT_CONFIG as CFG } from './config.js';
+import { DEFAULT_CONFIG as CFG, FULL_SCALE_CM, PUMP_ON_CM, PUMP_OFF_CM } from './config.js';
 import { createInitialState, step, setValve, setMode, setManualCommand } from './engine.js';
 import { createBridge } from './bridge.js';
 import { createFakeDb } from './fakeDb.js';
@@ -15,6 +15,7 @@ function makeTab(fake, { clientId = 'tab-A', email = 'a@team.test', clock } = {}
     sim: createInitialState(),
     statuses: [],
     intents: [],
+    configs: [],
     interval: null,
     advance(ticks = 1) { for (let i = 0; i < ticks; i++) tab.sim = step(tab.sim, CFG, CFG.tickSec, () => 0.5); },
   };
@@ -28,6 +29,7 @@ function makeTab(fake, { clientId = 'tab-A', email = 'a@team.test', clock } = {}
         ? setMode(tab.sim, intent.value, 'dashboard')
         : setManualCommand(tab.sim, intent.value, 'dashboard');
     },
+    applyConfig: (patch) => { tab.configs.push(patch); },
     onStatus: (s) => tab.statuses.push(s),
     now: () => clock.t,
     setIntervalFn: (fn) => { tab.interval = fn; return 1; },
@@ -321,4 +323,19 @@ test('a database error stops publishing and is reported, not swallowed', async (
   assert.equal(tab.last().state, 'error');
   assert.match(tab.last().message, /PERMISSION_DENIED/);
   assert.equal(tab.bridge.isRunning(), false);
+});
+
+test('admin-set pump levels reach the twin: on connect, on change, and unsafe values fall back to defaults', async () => {
+  const fake = createFakeDb({ config: { pumpOnCm: 3, pumpOffCm: 8 } });
+  const tab = makeTab(fake, { clock: { t: 1000 } });
+  await tab.bridge.start();
+
+  const pct = (cm) => (cm / FULL_SCALE_CM) * 100;
+  assert.deepEqual(tab.configs.at(-1), { lowLevelPct: pct(3), fullLevelPct: pct(8) }, 'levels set before connecting apply');
+
+  fake.write('config', { pumpOnCm: 2.5, pumpOffCm: 9.5 });
+  assert.deepEqual(tab.configs.at(-1), { lowLevelPct: pct(2.5), fullLevelPct: pct(9.5) });
+
+  fake.write('config', { pumpOnCm: 2, pumpOffCm: 17 });             // above the safe level
+  assert.deepEqual(tab.configs.at(-1), { lowLevelPct: pct(PUMP_ON_CM), fullLevelPct: pct(PUMP_OFF_CM) });
 });

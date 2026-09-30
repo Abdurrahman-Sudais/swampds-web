@@ -15,6 +15,33 @@ export const FULL_SCALE_CM       = TANK_HEIGHT_CM - SENSOR_DROP_CM - SENSOR_CLEA
 export const PUMP_ON_CM          = 2;                   // 19 %
 export const PUMP_OFF_CM         = FULL_SCALE_CM - 0.5; // 10 cm = 95 %
 
+/**
+ * Limits for admin-set pump thresholds (Settings page). The same limits are enforced by the
+ * database rules (database.rules.json) and clamped again by the firmware, so an out-of-range
+ * value can never reach the pump.
+ */
+export const PUMP_LIMITS = {
+  minOnCm:  1.5,          // above the 1 cm low-level warning, so a normal refill never raises it
+  maxOffCm: PUMP_OFF_CM,  // 10 cm: stop no higher than 0.5 cm below the highest safe level
+  minGapCm: 2,            // start and stop at least 2 cm apart, or sensor noise can make the pump cycle
+};
+
+const round1 = (v) => Math.round(v * 10) / 10;
+
+/**
+ * @returns {string|null} why the pair is not allowed, or null if it is
+ */
+export function validatePumpThresholds(onCm, offCm) {
+  if (!Number.isFinite(onCm) || !Number.isFinite(offCm)) return 'Enter both levels as numbers.';
+  if (onCm < PUMP_LIMITS.minOnCm) return `Pump ON level must be at least ${PUMP_LIMITS.minOnCm} cm.`;
+  if (offCm > PUMP_LIMITS.maxOffCm) return `Pump OFF level can be at most ${PUMP_LIMITS.maxOffCm} cm (the highest safe level).`;
+  if (round1(offCm - onCm) < PUMP_LIMITS.minGapCm) return `Keep the OFF level at least ${PUMP_LIMITS.minGapCm} cm above the ON level.`;
+  return null;
+}
+
+/** cm -> % of the highest safe level (what the dashboard and twin show as 100 %). */
+export const levelPct = (cm) => (cm / FULL_SCALE_CM) * 100;
+
 export const DEFAULT_CONFIG = {
   // Timing
   tickSec: 0.7,            // simulation step (PRD NFR5: ~0.7 s)

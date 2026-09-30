@@ -20,7 +20,10 @@
  * WHAT THE TWIN OBEYS (written by the dashboard):
  *   status/controlMode  'auto' | 'manual'
  *   control/pumpCommand 'on' | 'off'   (only in manual mode)
+ *   config/pumpOnCm, config/pumpOffCm   admin-set auto-pump levels (cm); defaults when absent or unsafe
  */
+
+import { PUMP_ON_CM, PUMP_OFF_CM, validatePumpThresholds, levelPct } from './config.js';
 
 export const DATA_SOURCE = 'digital-twin';
 export const PUBLISH_INTERVAL_MS = 1000;
@@ -168,6 +171,18 @@ export function controlIntents(sim, remote) {
     intents.push({ type: 'command', value: cmd });
   }
   return intents;
+}
+
+/**
+ * config/ node -> the twin's auto-pump levels (config patch). Missing or out-of-limit values fall
+ * back to the defaults, exactly as the firmware does.
+ */
+export function pumpLevelsFromDb(config) {
+  const ok = validatePumpThresholds(config?.pumpOnCm, config?.pumpOffCm) === null;
+  return {
+    lowLevelPct:  levelPct(ok ? config.pumpOnCm  : PUMP_ON_CM),
+    fullLevelPct: levelPct(ok ? config.pumpOffCm : PUMP_OFF_CM),
+  };
 }
 
 // Single-publisher lock

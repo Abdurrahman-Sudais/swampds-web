@@ -30,7 +30,7 @@ const NOT_ADMIN_MESSAGE = 'This account is view-only and cannot connect the Digi
  *
  * state: 'off' | 'loading' | 'signin' | 'connecting' | 'live' | 'locked' | 'displaced' | 'error'
  *
- * @param {{ sim: object, config: object, actions: { setMode: Function, setManualCommand: Function } }} args
+ * @param {{ sim: object, config: object, actions: { setMode: Function, setManualCommand: Function, updateConfig: Function } }} args
  */
 export function useFirebaseBridge({ sim, config, actions }) {
   const [status, setStatus] = useState({ state: 'off' });
@@ -74,6 +74,7 @@ export function useFirebaseBridge({ sim, config, actions }) {
       applyIntent: (intent) => (intent.type === 'mode'
         ? actionsRef.current.setMode(intent.value, 'dashboard')
         : actionsRef.current.setManualCommand(intent.value, 'dashboard')),
+      applyConfig: (patch) => actionsRef.current.updateConfig?.(patch),
       onStatus: setStatus,
       // keep publishing at full rate while the twin's tab is in the background
       setIntervalFn: setBackgroundInterval,

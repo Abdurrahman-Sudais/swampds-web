@@ -81,7 +81,7 @@ export default function TwinPage() {
   const bridge = useFirebaseBridge({
     sim,
     config,
-    actions: { setMode: twin.setMode, setManualCommand: twin.setManualCommand },
+    actions: { setMode: twin.setMode, setManualCommand: twin.setManualCommand, updateConfig: twin.updateConfig },
   });
   const [linkOpen, setLinkOpen] = useState(false);
 

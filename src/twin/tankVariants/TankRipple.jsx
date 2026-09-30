@@ -7,7 +7,7 @@ const clamp = (v, lo = 0, hi = 100) => Math.min(hi, Math.max(lo, v));
  * The only changes: the fill transitions smoothly instead of snapping, and a
  * thin animated line sits at the surface to read as "liquid" rather than "bar chart".
  */
-export function TankRippleFragment({ percent, low = false, full = false, w = 96, h = 140 }) {
+export function TankRippleFragment({ percent, showLabel = true, low = false, full = false, w = 96, h = 140 }) {
   const id = useId();
   const pct = clamp(percent);
   const fillH = (pct / 100) * (h - 4);
@@ -40,10 +40,12 @@ export function TankRippleFragment({ percent, low = false, full = false, w = 96,
       <rect x="2" y="2" width={w - 4} height={h - 4} rx="12" fill="none"
         className="stroke-slate-300 dark:stroke-slate-700" strokeWidth="2" />
 
-      <text x={w / 2} y={h / 2 + 5} textAnchor="middle" fontSize={Math.max(10, w * 0.17)} fontWeight="700"
-        className="fill-slate-800 dark:fill-slate-100 font-mono">
-        {Math.round(pct)}%
-      </text>
+      {showLabel && (
+        <text x={w / 2} y={h / 2 + 5} textAnchor="middle" fontSize={Math.max(10, w * 0.17)} fontWeight="700"
+          className="fill-slate-800 dark:fill-slate-100 font-mono">
+          {Math.round(pct)}%
+        </text>
+      )}
     </g>
   );
 }

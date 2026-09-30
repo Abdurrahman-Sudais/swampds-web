@@ -10,7 +10,7 @@ const clamp = (v, lo = 0, hi = 100) => Math.min(hi, Math.max(lo, v));
  * `Fragment` renders just the SVG content (defs/rects/text, no outer <svg>), so
  * it can be embedded inside another SVG's coordinate space with a plain <g>.
  */
-export function TankWaveFragment({ percent, w = 96, h = 140 }) {
+export function TankWaveFragment({ percent, showLabel = true, w = 96, h = 140 }) {
   const id = useId();
   const pct = clamp(percent);
   const fillY = h - (pct / 100) * h;
@@ -50,10 +50,12 @@ export function TankWaveFragment({ percent, w = 96, h = 140 }) {
       <rect x="2" y="2" width={w - 4} height={h - 4} rx="14" fill="none"
         className="stroke-slate-300 dark:stroke-slate-700" strokeWidth="2" />
 
-      <text x={w / 2} y={h / 2 + 5} textAnchor="middle" fontSize={Math.max(10, w * 0.17)} fontWeight="700"
-        className="fill-slate-800 dark:fill-slate-100 font-mono" style={{ paintOrder: 'stroke', stroke: 'white', strokeWidth: 3, strokeOpacity: 0.5 }}>
-        {Math.round(pct)}%
-      </text>
+      {showLabel && (
+        <text x={w / 2} y={h / 2 + 5} textAnchor="middle" fontSize={Math.max(10, w * 0.17)} fontWeight="700"
+          className="fill-slate-800 dark:fill-slate-100 font-mono" style={{ paintOrder: 'stroke', stroke: 'white', strokeWidth: 3, strokeOpacity: 0.5 }}>
+          {Math.round(pct)}%
+        </text>
+      )}
     </>
   );
 }
