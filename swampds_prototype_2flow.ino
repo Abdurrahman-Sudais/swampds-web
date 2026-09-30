@@ -61,7 +61,7 @@ const float SENSOR_DROP_CM       = 4.5;          // how far below the rim the ul
 const float SENSOR_CLEARANCE_CM  = 3.0;          // HC-SR04 cannot measure closer than ~2 cm; +1 cm for ripples
 const float SENSOR_TO_BOTTOM_CM  = TANK_HEIGHT_CM - SENSOR_DROP_CM;            // 13.5 cm
 const float DELIVERY_HEIGHT_CM   = SENSOR_TO_BOTTOM_CM - SENSOR_CLEARANCE_CM;  // 10.5 cm = 100 % (highest safe level)
-const float FLOW_K[2]            = {7.5, 7.5};   // pulses/s per L/min — calibrate each sensor
+const float FLOW_K[2]            = {7.5, 7.5};   // YF-S201: 7.5 pulses/s per L/min (datasheet) — fine-tune each sensor with the jug test
 const float TOLERANCE_PCT        = 20.0;         // flow loss between flow1/flow2 that counts as a leak
 const uint32_t PERSIST_SEC       = 10;
 const float MIN_FLOW_LPM         = 0.5;
