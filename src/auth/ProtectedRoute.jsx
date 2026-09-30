@@ -1,27 +1,20 @@
 import React from 'react';
-import { Navigate, Outlet } from 'react-router-dom';
+import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from './AuthContext';
+import { AppShellSkeleton } from '../components/skeleton/Skeleton';
 
 /**
  * Route guard - renders child routes only when authenticated.
  *
- * while loading   → full-screen spinner (avoids flash of login page)
+ * while loading   → skeleton of the app shell (avoids flash of login page)
  * no user         → redirect to /login
  * authenticated   → renders <Outlet /> (nested routes)
  */
 export default function ProtectedRoute() {
   const { user, loading } = useAuth();
+  const { pathname } = useLocation();
 
-  if (loading) {
-    return (
-      <div className="h-screen flex items-center justify-center bg-slate-50">
-        <div className="flex flex-col items-center gap-3 text-slate-400">
-          <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-          <span className="text-sm">Loading…</span>
-        </div>
-      </div>
-    );
-  }
+  if (loading) return <AppShellSkeleton pathname={pathname} />;
 
   return user ? <Outlet /> : <Navigate to="/login" replace />;
 }

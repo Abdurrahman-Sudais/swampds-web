@@ -40,6 +40,28 @@ body {
   .fluid-flow, .subtle-pulse, .gentle-drip { animation: none; }
 }
 
+/* Skeleton loading placeholders (src/components/skeleton). The gradient is fixed to the
+   viewport, so every block on screen shares one highlight sweeping left to right instead of
+   each block shimmering on its own. */
+@keyframes skeleton-shimmer {
+  from { background-position: 100% 0; }
+  to   { background-position: 0% 0; }
+}
+.skeleton {
+  background-color: #e2e8f0;
+  background-image: linear-gradient(100deg, #e2e8f0 40%, #f1f5f9 50%, #e2e8f0 60%);
+  background-size: 300vw 100%;
+  background-attachment: fixed;
+  animation: skeleton-shimmer 1.6s ease-in-out infinite;
+}
+.skeleton-dark {
+  background-color: #1e293b;
+  background-image: linear-gradient(100deg, #1e293b 40%, #334155 50%, #1e293b 60%);
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; background-image: none; }
+}
+
 /* Pipeline schematic tank fill animations (src/twin/tankVariants); the viewer picks
    one on /twin and it's saved to swampds_tank_style in localStorage. */
 @keyframes tank-wave-drift-a {

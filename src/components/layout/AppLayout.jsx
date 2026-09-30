@@ -14,6 +14,13 @@ import Sidebar from './Sidebar';
 import TopBar  from './TopBar';
 import DataSourceBanner from './DataSourceBanner';
 import { useSwampdsData } from '../../data/swampdsData';
+import { useAuth } from '../../auth/AuthContext';
+import { useUnreadAlerts } from './useUnreadAlerts';
+import { PageSkeleton } from '../skeleton/Skeleton';
+
+// How long to hold the skeleton for the first Firebase snapshot before showing the page anyway
+// (with its empty values and the offline banner) rather than leaving it loading forever.
+const FIRST_DATA_WAIT_MS = 8000;
 
 const NAV_ITEMS = [
   { to: '/dashboard',    icon: LayoutDashboard, label: 'Dashboard'    },
@@ -43,7 +50,23 @@ const ROUTE_TITLES = {
 export default function AppLayout() {
   const { pathname } = useLocation();
   const { alerts, status, loaded, meta } = useSwampdsData();
+  const { user } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { unreadCount, markSeen } = useUnreadAlerts(alerts, user?.uid);
+
+  // Looking at the alerts page counts as reading them - including ones that arrive while it's open
+  useEffect(() => {
+    if (pathname === '/alerts') markSeen();
+  }, [pathname, markSeen]);
+
+  // Show a skeleton, not placeholder zeros, until the first real data arrives
+  const [waitedOut, setWaitedOut] = useState(false);
+  useEffect(() => {
+    if (loaded) return;
+    const id = setTimeout(() => setWaitedOut(true), FIRST_DATA_WAIT_MS);
+    return () => clearTimeout(id);
+  }, [loaded]);
+  const awaitingData = !loaded && !waitedOut;
 
   // Automatically close mobile drawer whenever the user navigates
   useEffect(() => {
@@ -127,7 +150,6 @@ export default function AppLayout() {
   }, [loaded, meta?.source, meta?.online]);
 
   const pageTitle  = ROUTE_TITLES[pathname] ?? 'SWAMPDS';
-  const alertCount = alerts.filter(a => a.severity === 'critical').length;
 
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden font-sans">
@@ -140,14 +162,15 @@ export default function AppLayout() {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <TopBar
           title={pageTitle}
-          alertCount={alertCount}
+          unreadCount={unreadCount}
+          onAlertsClick={markSeen}
           onMenuClick={() => setSidebarOpen(prev => !prev)}
         />
         <DataSourceBanner meta={meta} />
         <main className="flex-1 overflow-y-auto p-4 sm:p-6">
           {/* Keep the sidebar/top bar on screen while a lazy page loads */}
-          <Suspense fallback={<div className="p-6 text-sm text-slate-400">Loading…</div>}>
-            <Outlet />
+          <Suspense fallback={<PageSkeleton pathname={pathname} />}>
+            {awaitingData ? <PageSkeleton pathname={pathname} /> : <Outlet />}
           </Suspense>
         </main>
       </div>

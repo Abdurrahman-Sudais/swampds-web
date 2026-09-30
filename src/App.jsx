@@ -1,5 +1,6 @@
 import React, { lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { AppShellSkeleton, LoginSkeleton, PublicPageSkeleton } from './components/skeleton/Skeleton';
 
 // Everything that touches Firebase is lazy-loaded, so public pages such as /twin
 // never download or initialise it (and work with no VITE_FIREBASE_* variables).
@@ -21,15 +22,12 @@ const PumpingHistory   = lazy(() => import('./pages/PumpingHistory'));
 const SettingsPage     = lazy(() => import('./pages/SettingsPage'));
 const NotFound         = lazy(() => import('./pages/NotFound'));
 
+// First-load placeholder, shaped like whatever page is on the way (chunks are still downloading)
 function PageLoader() {
-  return (
-    <div className="h-screen flex items-center justify-center bg-slate-50">
-      <div className="flex flex-col items-center gap-3 text-slate-400">
-        <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-        <span className="text-sm">Loading…</span>
-      </div>
-    </div>
-  );
+  const { pathname } = useLocation();
+  if (pathname.startsWith('/twin'))  return <PublicPageSkeleton />;
+  if (pathname.startsWith('/login')) return <LoginSkeleton />;
+  return <AppShellSkeleton pathname={pathname} />;
 }
 
 export default function App() {
