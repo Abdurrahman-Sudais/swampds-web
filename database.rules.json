@@ -7,7 +7,7 @@
     "config": {
       ".validate": "newData.hasChildren(['pumpOnCm', 'pumpOffCm']) && newData.child('pumpOffCm').val() - newData.child('pumpOnCm').val() >= 2",
       "pumpOnCm":  { ".validate": "newData.isNumber() && newData.val() >= 1.5" },
-      "pumpOffCm": { ".validate": "newData.isNumber() && newData.val() <= 10" },
+      "pumpOffCm": { ".validate": "newData.isNumber() && newData.val() <= 12" },
       "$other":    { ".validate": false }
     },
 

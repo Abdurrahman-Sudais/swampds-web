@@ -27,6 +27,7 @@
 #include <WiFi.h>
 #include <Wire.h>
 #include <time.h>
+#include <esp_system.h>
 #include <sys/time.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -57,10 +58,10 @@ const uint8_t FLOW_PINS[2] = {32, 33};                  // flow1 = nearest the p
 // ======================= Tunables — keep in step with src/twin/config.js and PUMP_THRESHOLDS =======================
 // Delivery tank geometry. Only the first three are measured; the rest follow from them.
 const float TANK_HEIGHT_CM       = 18.0;         // inside height of the tank
-const float SENSOR_DROP_CM       = 4.5;          // how far below the rim the ultrasonic sensor's face sits
-const float SENSOR_CLEARANCE_CM  = 3.0;          // HC-SR04 cannot measure closer than ~2 cm; +1 cm for ripples
-const float SENSOR_TO_BOTTOM_CM  = TANK_HEIGHT_CM - SENSOR_DROP_CM;            // 13.5 cm
-const float DELIVERY_HEIGHT_CM   = SENSOR_TO_BOTTOM_CM - SENSOR_CLEARANCE_CM;  // 10.5 cm = 100 % (highest safe level)
+const float SENSOR_DROP_CM       = 1.2;          // how far below the rim the ultrasonic sensor's face sits
+const float SENSOR_CLEARANCE_CM  = 4.3;          // allowance under the sensor (HC-SR04 is blind closer than ~2 cm)
+const float SENSOR_TO_BOTTOM_CM  = TANK_HEIGHT_CM - SENSOR_DROP_CM;            // 16.8 cm
+const float DELIVERY_HEIGHT_CM   = SENSOR_TO_BOTTOM_CM - SENSOR_CLEARANCE_CM;  // 12.5 cm = 100 % (highest safe level)
 const float FLOW_K[2]            = {7.5, 7.5};   // YF-S201: 7.5 pulses/s per L/min (datasheet) — fine-tune each sensor with the jug test
 const float TOLERANCE_PCT        = 20.0;         // flow loss between flow1/flow2 that counts as a leak
 const uint32_t PERSIST_SEC       = 10;
@@ -68,8 +69,8 @@ const float MIN_FLOW_LPM         = 0.5;
 // Auto-mode pump levels. These are the DEFAULTS: admins can change them from the dashboard's
 // Settings page (config/pumpOnCm, config/pumpOffCm), within the limits below. The same limits
 // are enforced by the database rules and src/twin/config.js (PUMP_LIMITS).
-const float PUMP_ON_BELOW_CM     = 2.0;                        // auto: pump ON at or below this water depth (19 %)
-const float PUMP_OFF_ABOVE_CM    = DELIVERY_HEIGHT_CM - 0.5;   // auto: pump OFF at 10 cm (95 %); 0.5 cm for water still in the pipe
+const float PUMP_ON_BELOW_CM     = 2.0;                        // auto: pump ON at or below this water depth (16 %)
+const float PUMP_OFF_ABOVE_CM    = DELIVERY_HEIGHT_CM - 0.5;   // auto: pump OFF at 12 cm (96 %); 0.5 cm for water still in the pipe
 const float MIN_PUMP_ON_CM       = 1.5;                        // limit: ON no lower than this (above the low-level warning)
 const float MAX_PUMP_OFF_CM      = PUMP_OFF_ABOVE_CM;          // limit: OFF no higher than the safe level
 const float MIN_PUMP_GAP_CM      = 2.0;                        // limit: OFF at least this far above ON (no rapid cycling)
@@ -136,6 +137,17 @@ bool wifiUp = false, firebaseStarted = false, firebaseAnnounced = false;
 // Only touch Firebase once it is started and Wi-Fi is up; otherwise its calls can block the loop.
 bool online() { return firebaseStarted && WiFi.status() == WL_CONNECTED && Firebase.ready(); }
 bool buzzerTone = false;
+uint8_t oledAddr = 0;             // I2C address the OLED answered at; 0 = not found
+uint32_t lastOledCheck = 0;
+
+// Hardware check (Serial Monitor). Counters cover the time since the last report.
+const uint32_t HW_REPORT_MS = 10000;
+uint32_t lastHwReport = 0;
+uint32_t hwFlowPulses[2] = {0, 0};
+uint16_t hwPumpOnSec = 0, hwRelaySwitches = 0;
+uint8_t lastEchoes = 0;           // valid echoes (of 5) in the latest level reading
+float lastDistCm = -1;            // sensor-to-water distance of the latest good reading
+esp_reset_reason_t bootReason;
 
 // ======================= Time helpers =======================
 bool timeSynced() { return time(nullptr) > 1700000000; }
@@ -199,6 +211,7 @@ void logPumpRun() {
 void setPump(bool on) {
   if (on == pumpOn) return;
   pumpOn = on;
+  hwRelaySwitches++;
   digitalWrite(PIN_RELAY, (on == RELAY_ACTIVE_HIGH) ? HIGH : LOW);
   if (on) { pumpOnSince = millis(); pumpStartedMs = nowMs(); }
   else    { logPumpRun(); pumpStartedMs = 0; }
@@ -222,9 +235,11 @@ float pingCm() {
 void readLevel() {
   float s[5]; int n = 0;
   for (int i = 0; i < 5; i++) { float x = pingCm(); if (x >= 2 && x <= 400) s[n++] = x; delay(30); }
+  lastEchoes = n;
   if (n < 3) { if (++badReads >= SENSOR_FAULT_AFTER) sensorFault = true; return; }
   badReads = 0; sensorFault = false; levelKnown = true;
   for (int i = 1; i < n; i++) { float k = s[i]; int j = i - 1; while (j >= 0 && s[j] > k) { s[j + 1] = s[j]; j--; } s[j + 1] = k; }
+  lastDistCm = s[n / 2];
   float h = constrain(SENSOR_TO_BOTTOM_CM - s[n / 2], 0.0f, DELIVERY_HEIGHT_CM);
   levelCm = h;
   levelPct = h / DELIVERY_HEIGHT_CM * 100.0f;
@@ -233,7 +248,7 @@ void readLevel() {
 void calcFlows(uint32_t dtMs) {
   uint32_t p[2];
   noInterrupts(); for (int i = 0; i < 2; i++) { p[i] = flowPulses[i]; flowPulses[i] = 0; } interrupts();
-  for (int i = 0; i < 2; i++) flow[i] = (p[i] * 1000.0f / dtMs) / FLOW_K[i];
+  for (int i = 0; i < 2; i++) { flow[i] = (p[i] * 1000.0f / dtMs) / FLOW_K[i]; hwFlowPulses[i] += p[i]; }
 }
 
 // Single segment: flow1 (near pump) vs flow2 (downstream). Anything past
@@ -402,6 +417,119 @@ void updateBuzzer() {
   if (want != buzzerTone) { ledcWriteTone(PIN_BUZZER, want ? 1000 : 0); buzzerTone = want; }
 }
 
+// ======================= OLED check =======================
+// Most modules answer at 0x3C, some at 0x3D. 0 = nothing answered.
+uint8_t findOled() {
+  for (uint8_t a = 0x3C; a <= 0x3D; a++) { Wire.beginTransmission(a); if (Wire.endTransmission() == 0) return a; }
+  return 0;
+}
+
+// While the OLED is missing, re-scan every 5 s: a fixed wire brings the screen up without a reboot.
+void checkOled(uint32_t now) {
+  if (oledAddr || now - lastOledCheck < 5000) return;
+  lastOledCheck = now;
+  if ((oledAddr = findOled())) display.begin(SSD1306_SWITCHCAPVCC, oledAddr);
+}
+
+// ======================= Hardware check (Serial Monitor, every 10 s) =======================
+// Reports every part as OK or PROBLEM with what to check. Printed from loop() rather than setup(),
+// so it still reaches a Serial Monitor opened after boot. The relay and LEDs cannot be sensed, so
+// for those it prints what the code is asking for: if the hardware does something else, it is wiring.
+bool resetIsProblem(esp_reset_reason_t r) {
+  return r == ESP_RST_BROWNOUT || r == ESP_RST_PANIC || r == ESP_RST_INT_WDT || r == ESP_RST_TASK_WDT || r == ESP_RST_WDT;
+}
+
+const char *resetText(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON:  return "power on (normal)";
+    case ESP_RST_EXT:
+    case ESP_RST_SW:       return "reset button / upload (normal)";
+    case ESP_RST_BROWNOUT: return "BROWNOUT: the supply voltage dipped, usually the pump starting. Give the pump its own supply (shared GND)";
+    case ESP_RST_PANIC:    return "firmware crash. Copy the Serial Monitor text from before the reboot";
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT:      return "watchdog: the program froze and was restarted";
+    default:               return "other";
+  }
+}
+
+void hwLine(const char *part, bool ok, const String &msg, String &problems) {
+  Serial.printf("  %-13s: %s%s\n", part, ok ? "OK  " : "PROBLEM - ", msg.c_str());
+  if (!ok) problems += problems.length() ? String(", ") + part : String(part);
+}
+
+void flowLine(int i, String &problems) {
+  const char *name = i == 0 ? "Flow 1" : "Flow 2";
+  uint32_t p = hwFlowPulses[i];
+  String pin = String("GPIO") + FLOW_PINS[i];
+  if (i == 0 && holdActive(millis()))   // the dry-run stop is itself proof flow 1 saw no water
+    hwLine(name, false, "the pump ran " + String(DRY_RUN_SEC) + " s with no flow here and was stopped. Water moving? If yes, check red->5V, black->GND, yellow->divider->" + pin + ", arrow points with the flow", problems);
+  else if (hwPumpOnSec >= 5 && p == 0)
+    hwLine(name, false, "pump ran " + String(hwPumpOnSec) + " s but no pulses on " + pin +
+           ". Check red->5V, black->GND, yellow->divider->" + pin + ", arrow points with the flow", problems);
+  else if (hwPumpOnSec == 0 && p > 0)
+    hwLine(name, true, String(p) + " pulses while the pump was OFF (water draining, or noise on the signal wire)", problems);
+  else
+    hwLine(name, true, String(p) + " pulses, " + String(flow[i], 1) + " L/min" + (hwPumpOnSec ? "" : " (pump OFF, 0 is normal)"), problems);
+}
+
+void hardwareReport() {
+  String problems = "";
+  Serial.printf("\n---------- HARDWARE CHECK  (up %s, firmware %s) ----------\n", fmtDuration(millis() / 1000).c_str(), FW_VERSION);
+
+  hwLine("Last reboot", !resetIsProblem(bootReason), resetText(bootReason), problems);
+
+  if (WiFi.status() == WL_CONNECTED) {
+    int rssi = WiFi.RSSI();
+    hwLine("Wi-Fi", rssi > -80, "\"" + WiFi.SSID() + "\" " + rssi + " dBm" + (rssi > -80 ? "" : " (weak - move closer to the hotspot)"), problems);
+  } else hwLine("Wi-Fi", false, String("not connected to \"") + WIFI_SSID + "\": " + wifiReason(WiFi.status()), problems);
+
+  if (online()) hwLine("Firebase", true, "connected", problems);
+  else if (WiFi.status() != WL_CONNECTED) hwLine("Firebase", false, "waiting for Wi-Fi", problems);
+  else hwLine("Firebase", false, "not connected: " + fbdoWrite.errorReason() + " (check secrets.h)", problems);
+
+  if (oledAddr) hwLine("OLED", true, "found at 0x" + String(oledAddr, HEX), problems);
+  else {
+    String seen = "";
+    for (uint8_t a = 1; a < 127; a++) { Wire.beginTransmission(a); if (Wire.endTransmission() == 0) seen += " 0x" + String(a, HEX); }
+    hwLine("OLED", false, "not found. Check SDA->GPIO21, SCL->GPIO22 (try swapping), VCC->3.3V, GND. I2C devices seen:" +
+           (seen.length() ? seen + " (wrong address, or not an SSD1306)" : String(" none")), problems);
+  }
+
+  if (lastEchoes == 0)
+    hwLine("Level sensor", false, "no echo at all. Check TRIG->GPIO5, ECHO->divider->GPIO18, VCC->5V, GND", problems);
+  else if (lastEchoes < 3)
+    hwLine("Level sensor", false, "unstable, " + String(lastEchoes) + "/5 echoes. Loose wire, or not aimed straight at the water", problems);
+  else if (lastDistCm > SENSOR_TO_BOTTOM_CM + 3)
+    hwLine("Level sensor", false, String(lastDistCm, 1) + " cm away, deeper than the tank (" + String(SENSOR_TO_BOTTOM_CM, 1) +
+           " cm). Is it mounted straight, facing the water?", problems);
+  else
+    hwLine("Level sensor", true, String(lastDistCm, 1) + " cm to the water, depth " + String(levelCm, 1) + " cm (" +
+           String(lastEchoes) + "/5 echoes)", problems);
+
+  flowLine(0, problems);
+  flowLine(1, problems);
+
+  String relay = String("pump ") + (pumpOn ? "ON" : "OFF") + ", GPIO" + PIN_RELAY + " " + (digitalRead(PIN_RELAY) ? "HIGH" : "LOW") +
+                 " (relay should be " + (pumpOn ? "pulled in, LED on" : "released, LED off") + "), switched " +
+                 hwRelaySwitches + "x in the last 10 s";
+  if (hwRelaySwitches > 4) hwLine("Relay", false, relay + " - the code is switching it rapidly", problems);
+  else hwLine("Relay", true, relay + ". If it clicks more than this, it is power or wiring", problems);
+
+  const char *st = status == S_LEAK ? "LEAK" : status == S_WARNING ? "WARNING" : "NORMAL";
+  const char *led = status == S_LEAK ? "RED (and the buzzer)" : status == S_WARNING ? "YELLOW" : "GREEN";
+  Serial.printf("  %-13s: only %s should be lit (status %s)\n", "LEDs", led, st);
+
+  uint32_t heap = ESP.getFreeHeap();
+  hwLine("Free memory", heap > 20000, String(heap / 1024) + " KB", problems);
+
+  if (problems.length()) Serial.printf("  >>> CHECK: %s\n", problems.c_str());
+  else                   Serial.println("  >>> All hardware OK");
+  Serial.println("----------------------------------------------------------------");
+
+  hwFlowPulses[0] = hwFlowPulses[1] = 0; hwPumpOnSec = 0; hwRelaySwitches = 0;
+}
+
 void updateDisplay() {
   display.clearDisplay(); display.setCursor(0, 0);
   display.printf("SWAMPDS   %s\n", online() ? "ONLINE" : "OFFLINE");
@@ -469,6 +597,7 @@ void announceBoot() {
 // ======================= Arduino =======================
 void setup() {
   Serial.begin(115200);
+  bootReason = esp_reset_reason();
 
   // Set the "off" level BEFORE making the pin an output: a new output starts LOW, which on a
   // low-level-trigger relay would click the pump on for a moment at every boot.
@@ -485,13 +614,10 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(FLOW_PINS[1]), isr1, RISING);
   // GPIO34 (formerly flow3) is now free — available if you add a sensor back later.
 
-  // Find the OLED: most modules answer at 0x3C, some at 0x3D. begin() must still run when it is
-  // missing, because every display call writes into the buffer it allocates.
+  // begin() must run even when the OLED is missing: every display call writes into the buffer it
+  // allocates. The hardware check reports the result once loop() is running.
   Wire.begin(PIN_SDA, PIN_SCL);
-  uint8_t oledAddr = 0;
-  for (uint8_t a = 0x3C; a <= 0x3D && !oledAddr; a++) { Wire.beginTransmission(a); if (Wire.endTransmission() == 0) oledAddr = a; }
-  if (oledAddr) Serial.printf("OLED found at 0x%02X\n", oledAddr);
-  else          Serial.println("OLED NOT FOUND on I2C (SDA 21, SCL 22) - check wiring, power and GND");
+  oledAddr = findOled();
   if (!display.begin(SSD1306_SWITCHCAPVCC, oledAddr ? oledAddr : 0x3C)) Serial.println("OLED: not enough memory for the display buffer");
   display.setTextColor(SSD1306_WHITE); display.setTextSize(1);
   display.clearDisplay(); display.setCursor(0, 0); display.println("SWAMPDS booting...");
@@ -521,6 +647,7 @@ void loop() {
     WiFi.disconnect(); WiFi.reconnect(); lastWifiRetry = now;
   }
   reportConnection(now);
+  checkOled(now);
 
   if (online() && !streamsStarted) {
     bool a = Firebase.RTDB.beginStream(&fbdoModeStream, "status/controlMode");
@@ -538,6 +665,7 @@ void loop() {
   if (now - lastTick >= 1000) {
     uint32_t dt = now - lastTick; lastTick = now;
     calcFlows(dt);
+    if (pumpOn) hwPumpOnSec++;
     readLevel();
     updateLeak(now);
     checkDryRun(now);
@@ -547,6 +675,8 @@ void loop() {
     updateDisplay();
   }
   updateBuzzer();
+
+  if (now - lastHwReport >= HW_REPORT_MS) { lastHwReport = now; hardwareReport(); }
 
   if (streamsStarted && (lastConfigPoll == 0 || now - lastConfigPoll >= CONFIG_POLL_MS)) {
     lastConfigPoll = now ? now : 1;

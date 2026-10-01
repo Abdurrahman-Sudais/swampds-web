@@ -165,7 +165,7 @@ function ThresholdsCard() {
         <Info className="w-4 h-4 flex-shrink-0 mt-0.5" />
         <span>
           Levels are water depth. 100% ({FULL_SCALE_CM} cm) is the highest level the ultrasonic sensor can
-          safely measure: the 18 cm tank minus the 4.5 cm the sensor sits below the rim and 3 cm of clearance.
+          safely measure: the 18 cm tank minus the 1.2 cm the sensor sits below the rim and 4.3 cm of allowance under it.
         </span>
       </div>
     </Card>
