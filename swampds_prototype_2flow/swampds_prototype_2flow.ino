@@ -38,7 +38,7 @@
 #include "secrets.h"
 
 #define DEVICE_ID      "SWAMPDS-ESP32-01"
-#define FW_VERSION     "1.1-2flow"
+#define FW_VERSION     "1.2-2flow"
 #define TZ_OFFSET_SEC  3600                             // Nigeria (WAT, UTC+1)
 
 // ======================= Pins =======================
@@ -129,7 +129,11 @@ String pendingMode, pendingCmd;
 bool modeKnown = false, cmdKnown = false, streamsStarted = false, bootAnnounced = false;
 
 bool snapshotDue = false;
-uint32_t lastTick = 0, lastPublish = 0, lastWifiRetry = 0;
+uint32_t lastTick = 0, lastPublish = 0, lastWifiRetry = 0, lastWifiWaitMsg = 0;
+bool wifiUp = false, firebaseStarted = false, firebaseAnnounced = false;
+
+// Only touch Firebase once it is started and Wi-Fi is up; otherwise its calls can block the loop.
+bool online() { return firebaseStarted && WiFi.status() == WL_CONNECTED && Firebase.ready(); }
 bool buzzerTone = false;
 
 // ======================= Time helpers =======================
@@ -166,7 +170,7 @@ bool holdActive(uint32_t now) {
 
 // ======================= Alerts / history =======================
 void pushAlert(const char *severity, const String &message) {
-  if (!Firebase.ready()) return;
+  if (!online()) return;
   FirebaseJson j;
   int64_t ms = nowMs();
   j.set("time", ms ? fmtTime(ms) : String("--"));
@@ -180,7 +184,7 @@ void pushAlert(const char *severity, const String &message) {
 
 void logPumpRun() {
   int64_t end = nowMs();
-  if (!Firebase.ready() || pumpStartedMs == 0 || end == 0) return;
+  if (!online() || pumpStartedMs == 0 || end == 0) return;
   FirebaseJson j;
   j.set("date", fmtDate(pumpStartedMs));
   j.set("start", fmtTime(pumpStartedMs));
@@ -202,7 +206,7 @@ void setPump(bool on) {
 }
 
 void writePumpCommand(const char *v) {
-  if (Firebase.ready()) Firebase.RTDB.setString(&fbdoWrite, "control/pumpCommand", v);
+  if (online()) Firebase.RTDB.setString(&fbdoWrite, "control/pumpCommand", v);
 }
 
 // ======================= Sensors =======================
@@ -274,7 +278,7 @@ void runPumpControl(uint32_t now) {
 // Admin-set levels from config/. Anything missing or outside the safe limits falls back to the
 // defaults, so a bad value can never reach the pump. On a read error the current levels are kept.
 void pollConfig() {
-  if (!Firebase.ready()) return;
+  if (!online()) return;
   if (!Firebase.RTDB.get(&fbdoWrite, "config")) { Serial.println(fbdoWrite.errorReason()); return; }
 
   float on = PUMP_ON_BELOW_CM, off = PUMP_OFF_ABOVE_CM;
@@ -331,6 +335,40 @@ void streamModeCb(FirebaseStream d) { if (d.dataType() == "string") { pendingMod
 void streamCmdCb(FirebaseStream d)  { if (d.dataType() == "string") { pendingCmd  = d.stringData(); cmdEvent  = true; } }
 void streamTimeoutCb(bool t) { if (t) Serial.println("stream timeout, resuming"); }
 
+// ======================= Connection report (Serial Monitor, 115200 baud) =======================
+const char *wifiReason(wl_status_t s) {
+  switch (s) {
+    case WL_NO_SSID_AVAIL:  return "network not found - is the hotspot on and set to 2.4 GHz?";
+    case WL_CONNECT_FAILED: return "connection refused - check the password";
+    case WL_CONNECTION_LOST:
+    case WL_DISCONNECTED:   return "not connected yet - wrong password, or the hotspot is out of range";
+    default:                return "waiting";
+  }
+}
+
+void reportConnection(uint32_t now) {
+  bool up = WiFi.status() == WL_CONNECTED;
+  if (up != wifiUp) {
+    wifiUp = up;
+    if (up) Serial.printf("\n>>> Connected to Wi-Fi \"%s\" | IP %s | signal %d dBm\n",
+                          WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
+    else    Serial.printf("\n>>> Wi-Fi lost, reconnecting to \"%s\"...\n", WIFI_SSID);
+    snapshotDue = true;
+  } else if (!up && now - lastWifiWaitMsg >= 3000) {
+    lastWifiWaitMsg = now;
+    Serial.printf("... still trying to reach \"%s\": %s\n", WIFI_SSID, wifiReason(WiFi.status()));
+  }
+  if (up && !firebaseStarted) {
+    Serial.println(">>> Signing in to Firebase...");
+    Firebase.begin(&config, &auth);
+    firebaseStarted = true;
+  }
+  if (up && !firebaseAnnounced && online()) {
+    firebaseAnnounced = true;
+    Serial.println(">>> Firebase connected - live data is going to the dashboard");
+  }
+}
+
 // ======================= Status, alerts, indicators =======================
 void evaluateStatus() {
   String warn = "";
@@ -365,7 +403,9 @@ void updateBuzzer() {
 
 void updateDisplay() {
   display.clearDisplay(); display.setCursor(0, 0);
-  display.printf("SWAMPDS   %s\n", Firebase.ready() ? "ONLINE" : "OFFLINE");
+  display.printf("SWAMPDS   %s\n", online() ? "ONLINE" : "OFFLINE");
+  if (wifiUp) display.printf("IP %s\n", WiFi.localIP().toString().c_str());
+  else        display.println("WiFi connecting...");
   display.printf("Level %d%%  %.1fcm\n", (int)round(levelPct), levelCm);
   display.printf("F1 %.1f  F2 %.1f\n", flow[0], flow[1]);
   display.printf("Pump %s  %s\n", pumpOn ? "ON" : "OFF", modeAuto ? "AUTO" : "MANUAL");
@@ -379,7 +419,7 @@ void updateDisplay() {
 float r1(float v) { return roundf(v * 10.0f) / 10.0f; }
 
 void publishSnapshot() {
-  if (!Firebase.ready()) return;
+  if (!online()) return;
   FirebaseJson root;
   root.set("sensors/flow1", r1(flow[0]));
   root.set("sensors/flow2", r1(flow[1]));
@@ -401,6 +441,8 @@ void publishSnapshot() {
 
   root.set("hardware/deviceId", DEVICE_ID);
   root.set("hardware/firmware", FW_VERSION);
+  root.set("hardware/wifi", WiFi.SSID());
+  root.set("hardware/ip", WiFi.localIP().toString());
   root.set("hardware/pumpOnCm", pumpOnCm);     // levels actually in force, so the dashboard can confirm a change
   root.set("hardware/pumpOffCm", pumpOffCm);
   root.set("hardware/lastSeen/.sv", "timestamp");
@@ -445,8 +487,10 @@ void setup() {
   Wire.begin(PIN_SDA, PIN_SCL);
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
   display.setTextColor(SSD1306_WHITE); display.setTextSize(1);
-  display.clearDisplay(); display.setCursor(0, 0); display.println("SWAMPDS booting..."); display.display();
+  display.clearDisplay(); display.setCursor(0, 0); display.println("SWAMPDS booting...");
+  display.printf("WiFi: %s\n", WIFI_SSID); display.display();
 
+  Serial.printf("\n\nSWAMPDS %s (%s) - connecting to Wi-Fi \"%s\"...\n", FW_VERSION, DEVICE_ID, WIFI_SSID);
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   configTime(TZ_OFFSET_SEC, 0, "pool.ntp.org", "time.google.com");
@@ -460,7 +504,7 @@ void setup() {
   fbdoModeStream.setBSSLBufferSize(2048, 512);
   fbdoCmdStream.setBSSLBufferSize(2048, 512);
   Firebase.reconnectWiFi(true);
-  Firebase.begin(&config, &auth);
+  // Firebase.begin() is called from loop() once Wi-Fi is up: started earlier, its sign-in blocks.
 }
 
 void loop() {
@@ -469,8 +513,9 @@ void loop() {
   if (WiFi.status() != WL_CONNECTED && now - lastWifiRetry > 10000) {
     WiFi.disconnect(); WiFi.reconnect(); lastWifiRetry = now;
   }
+  reportConnection(now);
 
-  if (Firebase.ready() && !streamsStarted) {
+  if (online() && !streamsStarted) {
     bool a = Firebase.RTDB.beginStream(&fbdoModeStream, "status/controlMode");
     bool b = Firebase.RTDB.beginStream(&fbdoCmdStream, "control/pumpCommand");
     if (a && b) {
@@ -479,7 +524,7 @@ void loop() {
       streamsStarted = true;
     }
   }
-  if (Firebase.ready() && streamsStarted && !bootAnnounced) announceBoot();
+  if (online() && streamsStarted && !bootAnnounced) announceBoot();
 
   handleStreamEvents();
 
