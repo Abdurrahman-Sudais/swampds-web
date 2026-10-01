@@ -98,6 +98,7 @@ float flow[2] = {0, 0};
 float levelPct = 0, levelCm = 0;
 uint8_t badReads = 0;
 bool sensorFault = false;
+bool levelKnown = false;          // no good reading yet: levelCm = 0 would look like an empty tank
 
 float pumpOnCm  = PUMP_ON_BELOW_CM;    // levels in force (defaults until config/ is read)
 float pumpOffCm = PUMP_OFF_ABOVE_CM;
@@ -222,7 +223,7 @@ void readLevel() {
   float s[5]; int n = 0;
   for (int i = 0; i < 5; i++) { float x = pingCm(); if (x >= 2 && x <= 400) s[n++] = x; delay(30); }
   if (n < 3) { if (++badReads >= SENSOR_FAULT_AFTER) sensorFault = true; return; }
-  badReads = 0; sensorFault = false;
+  badReads = 0; sensorFault = false; levelKnown = true;
   for (int i = 1; i < n; i++) { float k = s[i]; int j = i - 1; while (j >= 0 && s[j] > k) { s[j + 1] = s[j]; j--; } s[j + 1] = k; }
   float h = constrain(SENSOR_TO_BOTTOM_CM - s[n / 2], 0.0f, DELIVERY_HEIGHT_CM);
   levelCm = h;
@@ -262,7 +263,7 @@ void checkDryRun(uint32_t now) {
 
 void runPumpControl(uint32_t now) {
   if (modeAuto) {
-    bool blocked = sensorFault || leakA || holdActive(now);
+    bool blocked = !levelKnown || sensorFault || leakA || holdActive(now);
     if (pumpOn && (levelCm >= pumpOffCm || blocked)) setPump(false);
     else if (!pumpOn && !blocked && levelCm <= pumpOnCm) setPump(true);
   } else if (leakA) {
@@ -374,7 +375,7 @@ void evaluateStatus() {
   String warn = "";
   if (sensorFault) warn = "Water level sensor is not responding.";
   else if (holdActive(millis())) warn = "Pump stopped after running without flow.";
-  else if (levelCm < LOW_LEVEL_WARN_CM) warn = "Water level is low (" + String(levelCm, 1) + " cm).";
+  else if (levelKnown && levelCm < LOW_LEVEL_WARN_CM) warn = "Water level is low (" + String(levelCm, 1) + " cm).";
 
   status = leakA ? S_LEAK : (warn.length() ? S_WARNING : S_NORMAL);
 
@@ -484,8 +485,14 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(FLOW_PINS[1]), isr1, RISING);
   // GPIO34 (formerly flow3) is now free — available if you add a sensor back later.
 
+  // Find the OLED: most modules answer at 0x3C, some at 0x3D. begin() must still run when it is
+  // missing, because every display call writes into the buffer it allocates.
   Wire.begin(PIN_SDA, PIN_SCL);
-  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  uint8_t oledAddr = 0;
+  for (uint8_t a = 0x3C; a <= 0x3D && !oledAddr; a++) { Wire.beginTransmission(a); if (Wire.endTransmission() == 0) oledAddr = a; }
+  if (oledAddr) Serial.printf("OLED found at 0x%02X\n", oledAddr);
+  else          Serial.println("OLED NOT FOUND on I2C (SDA 21, SCL 22) - check wiring, power and GND");
+  if (!display.begin(SSD1306_SWITCHCAPVCC, oledAddr ? oledAddr : 0x3C)) Serial.println("OLED: not enough memory for the display buffer");
   display.setTextColor(SSD1306_WHITE); display.setTextSize(1);
   display.clearDisplay(); display.setCursor(0, 0); display.println("SWAMPDS booting...");
   display.printf("WiFi: %s\n", WIFI_SSID); display.display();
