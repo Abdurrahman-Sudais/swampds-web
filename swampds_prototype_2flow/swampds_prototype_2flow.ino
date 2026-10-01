@@ -48,7 +48,7 @@
 const uint8_t FLOW_PINS[2] = {32, 33};                  // flow1 = nearest the pump, flow2 = downstream
 #define PIN_SDA 21
 #define PIN_SCL 22
-#define PIN_RELAY 19
+#define PIN_RELAY 15                                    // strapping pin: pulled up at boot, so the LOW-trigger relay stays off
 #define PIN_LED_GREEN 25
 #define PIN_LED_RED 26
 #define PIN_LED_YELLOW 27
