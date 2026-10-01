@@ -57,11 +57,11 @@ const uint8_t FLOW_PINS[2] = {32, 33};                  // flow1 = nearest the p
 
 // ======================= Tunables — keep in step with src/twin/config.js and PUMP_THRESHOLDS =======================
 // Delivery tank geometry. Only the first three are measured; the rest follow from them.
-const float TANK_HEIGHT_CM       = 18.0;         // inside height of the tank
+const float TANK_HEIGHT_CM       = 19.0;         // inside height of the tank
 const float SENSOR_DROP_CM       = 1.2;          // how far below the rim the ultrasonic sensor's face sits
-const float SENSOR_CLEARANCE_CM  = 4.3;          // allowance under the sensor (HC-SR04 is blind closer than ~2 cm)
-const float SENSOR_TO_BOTTOM_CM  = TANK_HEIGHT_CM - SENSOR_DROP_CM;            // 16.8 cm
-const float DELIVERY_HEIGHT_CM   = SENSOR_TO_BOTTOM_CM - SENSOR_CLEARANCE_CM;  // 12.5 cm = 100 % (highest safe level)
+const float SENSOR_CLEARANCE_CM  = 3.8;          // allowance under the sensor (HC-SR04 is blind closer than ~2 cm)
+const float SENSOR_TO_BOTTOM_CM  = TANK_HEIGHT_CM - SENSOR_DROP_CM;            // 17.8 cm
+const float DELIVERY_HEIGHT_CM   = SENSOR_TO_BOTTOM_CM - SENSOR_CLEARANCE_CM;  // 14 cm = 100 % (highest safe level)
 const float FLOW_K[2]            = {7.5, 7.5};   // YF-S201: 7.5 pulses/s per L/min (datasheet) — fine-tune each sensor with the jug test
 const float TOLERANCE_PCT        = 20.0;         // flow loss between flow1/flow2 that counts as a leak
 const uint32_t PERSIST_SEC       = 10;
@@ -69,8 +69,8 @@ const float MIN_FLOW_LPM         = 0.5;
 // Auto-mode pump levels. These are the DEFAULTS: admins can change them from the dashboard's
 // Settings page (config/pumpOnCm, config/pumpOffCm), within the limits below. The same limits
 // are enforced by the database rules and src/twin/config.js (PUMP_LIMITS).
-const float PUMP_ON_BELOW_CM     = 2.0;                        // auto: pump ON at or below this water depth (16 %)
-const float PUMP_OFF_ABOVE_CM    = DELIVERY_HEIGHT_CM - 0.5;   // auto: pump OFF at 12 cm (96 %); 0.5 cm for water still in the pipe
+const float PUMP_ON_BELOW_CM     = 2.0;                        // auto: pump ON at or below this water depth (14 %)
+const float PUMP_OFF_ABOVE_CM    = DELIVERY_HEIGHT_CM - 0.5;   // auto: pump OFF at 13.5 cm (96 %); 0.5 cm for water still in the pipe
 const float MIN_PUMP_ON_CM       = 1.5;                        // limit: ON no lower than this (above the low-level warning)
 const float MAX_PUMP_OFF_CM      = PUMP_OFF_ABOVE_CM;          // limit: OFF no higher than the safe level
 const float MIN_PUMP_GAP_CM      = 2.0;                        // limit: OFF at least this far above ON (no rapid cycling)

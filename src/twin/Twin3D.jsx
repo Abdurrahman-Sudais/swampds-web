@@ -1,32 +1,121 @@
-import React, { useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, Html, RoundedBox } from '@react-three/drei';
+import { OrbitControls, Html, useGLTF } from '@react-three/drei';
+import { Box3, Color, Vector3 } from 'three';
 
 /**
  * 3D view of the pipeline, driven by the same `sim` state as PipelineSchematic.
  * Loaded lazily (see TwinPage), so three.js is only downloaded when someone opens it.
  *
- * Every part is a simple placeholder shape. To use a Blender model instead, export it as
- * glTF (.glb), load it with drei's useGLTF, and drive its named objects from `sim` the same
- * way these shapes are driven (water height from tanks, pump spin from pumpOn, and so on).
+ * The model is public/models/swampds.glb, built in Blender by blender/build_twin.py. Parts are
+ * found by name (listed in that script), so a model edited by hand keeps working as long as the
+ * names stay the same. Labels, water particles and drips are placed from each part's bounds.
  */
 
-// Nodes, left to right: source, pump, F1, valve A, F2, delivery (same order as the 2D schematic).
-const NODE_X = [-5, -3, -1, 1, 3, 5];
-const PIPE_Y = 0.45;
-const TANK = { r: 0.65, h: 1.7 };
+const MODEL_URL = `${import.meta.env.BASE_URL}models/swampds.glb`;
 
 // Which monitored segment each pipe run belongs to. Past F2 nothing is monitored.
 const PIPE_SEGMENT = [null, null, 'A', 'A', null];
+const PIPES = PIPE_SEGMENT.map((_, i) => `Pipe_${i}`);
 
 const WATER = '#38bdf8';
+const PUMP_ON = new Color('#10b981');
+const VALVE_OPEN = new Color('#f59e0b');
+const LEAK = new Color('#f43f5e');
+const VERIFYING = new Color('#fbbf24');
 const COLORS = {
-  light: { bg: '#f8fafc', floor: '#e2e8f0', pipe: '#cbd5e1', body: '#ffffff', off: '#94a3b8' },
-  dark:  { bg: '#020617', floor: '#0f172a', pipe: '#334155', body: '#1e293b', off: '#64748b' },
+  light: { bg: '#f8fafc', floor: '#e2e8f0' },
+  dark:  { bg: '#020617', floor: '#0f172a' },
 };
 
 // Eases a value toward its target each frame, so levels glide instead of jumping on each tick.
 const approach = (current, target, dt, rate = 4) => current + (target - current) * Math.min(1, dt * rate);
+
+const meshesOf = (node) => {
+  const out = [];
+  node?.traverse((o) => { if (o.isMesh) out.push(o); });
+  return out;
+};
+
+/** Sets a part's colour, or restores the one it has in the model when `color` is null. */
+function tint(node, color) {
+  for (const m of meshesOf(node)) m.material.color.copy(color ?? m.userData.baseColor);
+}
+
+/** Which clickable part a hit mesh belongs to. */
+function partOf(obj) {
+  for (let o = obj; o; o = o.parent) {
+    if (o.name.startsWith('Pump')) return 'pump';
+    if (o.name.startsWith('Valve_A')) return 'valve';
+  }
+  return null;
+}
+
+function useModel() {
+  const { scene } = useGLTF(MODEL_URL);
+  return useMemo(() => {
+    const root = scene.clone(true);
+    // Own materials per mesh, so tinting one part never changes another that shares a material.
+    root.traverse((o) => {
+      if (!o.isMesh) return;
+      o.material = o.material.clone();
+      o.userData.baseColor = o.material.color.clone();
+    });
+    // Glass: see-through, and never hides the water behind it.
+    for (const name of ['Tank_Source', 'Tank_Delivery']) {
+      for (const m of meshesOf(root.getObjectByName(name))) {
+        Object.assign(m.material, { transparent: true, opacity: 0.22, depthWrite: false });
+        m.renderOrder = 1;
+      }
+    }
+    root.updateMatrixWorld(true);
+    const get = (name) => root.getObjectByName(name);
+    const bounds = (name) => new Box3().setFromObject(get(name));
+    const top = (name) => {
+      const b = bounds(name);
+      return [(b.min.x + b.max.x) / 2, b.max.y + 0.35, (b.min.z + b.max.z) / 2];
+    };
+    const valve = bounds('Valve_A').getCenter(new Vector3());
+    return {
+      root,
+      water: { source: get('Water_Source'), delivery: get('Water_Delivery') },
+      pump: get('Pump_Body'),
+      rotor: get('Pump_Rotor'),
+      valve: get('Valve_A'),
+      handle: get('Valve_A_Handle'),
+      pipes: PIPES.map(get),
+      pipeRuns: PIPES.map((name) => {
+        const b = bounds(name);
+        return { from: b.min.x, to: b.max.x, y: (b.min.y + b.max.y) / 2 };
+      }),
+      labels: {
+        source: top('Tank_Source'), delivery: top('Tank_Delivery'), pump: top('Pump_Body'),
+        f1: top('Sensor_F1'), f2: top('Sensor_F2'), valve: top('Valve_A_Handle'),
+      },
+      drip: [valve.x, bounds('Valve_A').min.y, valve.z],
+    };
+  }, [scene]);
+}
+
+/** Colours and the valve handle follow the twin's state. */
+function showState(model, { pumpOn, valveOpen, segments }) {
+  tint(model.pump, pumpOn ? PUMP_ON : null);
+  tint(model.handle, valveOpen ? VALVE_OPEN : null);
+  model.handle.rotation.y = valveOpen ? Math.PI / 2 : 0;
+  model.pipes.forEach((pipe, i) => {
+    const seg = PIPE_SEGMENT[i] && segments[PIPE_SEGMENT[i]];
+    tint(pipe, seg?.leak ? LEAK : seg?.abnormalFor > 0 ? VERIFYING : null);
+  });
+}
+
+/** Per frame: water levels glide to the twin's values; the rotor spins while the pump runs. */
+function animate(model, { tanks, pumpOn }, dt) {
+  for (const side of ['source', 'delivery']) {
+    const w = model.water[side];
+    w.scale.y = approach(w.scale.y, Math.max(0.001, tanks[side] / 100), dt);
+  }
+  if (pumpOn) model.rotor.rotation.z -= dt * 12;
+}
 
 function Label({ position, title, value, tone = 'text-slate-700 dark:text-slate-200' }) {
   return (
@@ -39,114 +128,10 @@ function Label({ position, title, value, tone = 'text-slate-700 dark:text-slate-
   );
 }
 
-function Tank({ x, percent, palette, title }) {
-  const water = useRef();
-  useFrame((_, dt) => {
-    const target = Math.max(0.001, (percent / 100) * TANK.h);
-    const h = approach(water.current.scale.y, target, dt);
-    water.current.scale.y = h;
-    water.current.position.y = h / 2;
-  });
-  return (
-    <group position={[x, 0, 0]}>
-      <mesh position={[0, TANK.h / 2, 0]}>
-        <cylinderGeometry args={[TANK.r, TANK.r, TANK.h, 40, 1, true]} />
-        <meshStandardMaterial color={palette.pipe} transparent opacity={0.28} side={2} />
-      </mesh>
-      <mesh ref={water} scale={[1, 0.001, 1]}>
-        <cylinderGeometry args={[TANK.r * 0.94, TANK.r * 0.94, 1, 40]} />
-        <meshStandardMaterial color={WATER} transparent opacity={0.85} />
-      </mesh>
-      <Label position={[0, TANK.h + 0.35, 0]} title={title} value={`${Math.round(percent)}%`} />
-    </group>
-  );
-}
-
-function Pump({ on, manual, onToggle, palette }) {
-  const rotor = useRef();
-  useFrame((_, dt) => { if (on) rotor.current.rotation.x += dt * 12; });
-  return (
-    <group position={[NODE_X[1], PIPE_Y, 0]}>
-      <mesh
-        rotation={[0, 0, Math.PI / 2]}
-        onClick={(e) => { e.stopPropagation(); onToggle?.(); }}
-        onPointerOver={() => { if (manual) document.body.style.cursor = 'pointer'; }}
-        onPointerOut={() => { document.body.style.cursor = ''; }}
-      >
-        <cylinderGeometry args={[0.42, 0.42, 0.7, 32]} />
-        <meshStandardMaterial color={on ? '#10b981' : palette.off} />
-      </mesh>
-      <mesh ref={rotor}>
-        <boxGeometry args={[0.75, 0.12, 0.7]} />
-        <meshStandardMaterial color={palette.body} />
-      </mesh>
-      <Label position={[0, 0.9, 0]} title="Pump" value={on ? 'ON' : 'OFF'}
-        tone={on ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'} />
-    </group>
-  );
-}
-
-function Sensor({ x, name, flow, palette }) {
-  return (
-    <group position={[x, PIPE_Y, 0]}>
-      <RoundedBox args={[0.6, 0.5, 0.5]} radius={0.08}>
-        <meshStandardMaterial color={palette.body} />
-      </RoundedBox>
-      <mesh position={[0, 0.26, 0]}>
-        <boxGeometry args={[0.3, 0.02, 0.3]} />
-        <meshStandardMaterial color="#2563eb" />
-      </mesh>
-      <Label position={[0, 0.75, 0]} title={name} value={`${flow.toFixed(2)} L/min`} />
-    </group>
-  );
-}
-
-function Drips({ active }) {
-  const drops = useRef([]);
-  useFrame((state) => {
-    drops.current.forEach((d, i) => {
-      if (!d) return;
-      const t = (state.clock.elapsedTime * 0.9 + i / 3) % 1;
-      d.visible = active;
-      d.position.y = -0.3 - t * (PIPE_Y - 0.05);
-    });
-  });
-  return [0, 1, 2].map((i) => (
-    <mesh key={i} ref={(m) => { drops.current[i] = m; }} visible={false}>
-      <sphereGeometry args={[0.06, 12, 12]} />
-      <meshStandardMaterial color="#0284c7" />
-    </mesh>
-  ));
-}
-
-function Valve({ opening, leaking, onToggle, palette }) {
-  const open = opening > 0;
-  return (
-    <group position={[NODE_X[3], PIPE_Y, 0]}>
-      <mesh
-        onClick={(e) => { e.stopPropagation(); onToggle?.(); }}
-        onPointerOver={() => { document.body.style.cursor = 'pointer'; }}
-        onPointerOut={() => { document.body.style.cursor = ''; }}
-      >
-        <sphereGeometry args={[0.3, 32, 32]} />
-        <meshStandardMaterial color={open ? '#f59e0b' : palette.body} />
-      </mesh>
-      {/* Handle: turns a quarter when the valve is open */}
-      <mesh position={[0, 0.42, 0]} rotation={[0, open ? Math.PI / 2 : 0, 0]}>
-        <boxGeometry args={[0.55, 0.08, 0.1]} />
-        <meshStandardMaterial color={open ? '#d97706' : palette.off} />
-      </mesh>
-      <Drips active={leaking} />
-      <Label position={[0, 0.85, 0]} title="Valve A" value={`${opening}%`}
-        tone={open ? 'text-amber-600 dark:text-amber-400' : 'text-slate-400'} />
-    </group>
-  );
-}
-
 const PARTICLES = 5;
 
-function Pipe({ from, to, flow, color }) {
-  const len = to - from;
+/** Water moving through one pipe run; faster at higher flow, hidden when nothing flows. */
+function FlowParticles({ run, flow }) {
   const dots = useRef([]);
   const offset = useRef(0);
   const flowing = flow > 0.08;
@@ -155,63 +140,89 @@ function Pipe({ from, to, flow, color }) {
     dots.current.forEach((d, i) => {
       if (!d) return;
       d.visible = flowing;
-      d.position.x = (((offset.current + i / PARTICLES) % 1) - 0.5) * len;
+      d.position.x = run.from + ((offset.current + i / PARTICLES) % 1) * (run.to - run.from);
     });
   });
-  return (
-    <group position={[(from + to) / 2, PIPE_Y, 0]}>
-      <mesh rotation={[0, 0, Math.PI / 2]}>
-        <cylinderGeometry args={[0.12, 0.12, len, 20]} />
-        <meshStandardMaterial color={color} transparent opacity={0.55} />
-      </mesh>
-      {Array.from({ length: PARTICLES }, (_, i) => (
-        <mesh key={i} ref={(m) => { dots.current[i] = m; }} visible={false}>
-          <sphereGeometry args={[0.07, 12, 12]} />
-          <meshStandardMaterial color={WATER} emissive={WATER} emissiveIntensity={0.4} />
-        </mesh>
-      ))}
-    </group>
-  );
+  return Array.from({ length: PARTICLES }, (_, i) => (
+    <mesh key={i} ref={(m) => { dots.current[i] = m; }} position={[run.from, run.y, 0]} visible={false}>
+      <sphereGeometry args={[0.07, 12, 12]} />
+      <meshStandardMaterial color={WATER} emissive={WATER} emissiveIntensity={0.4} />
+    </mesh>
+  ));
+}
+
+function Drips({ at, active }) {
+  const drops = useRef([]);
+  useFrame((state) => {
+    drops.current.forEach((d, i) => {
+      if (!d) return;
+      const t = (state.clock.elapsedTime * 0.9 + i / 3) % 1;
+      d.visible = active;
+      d.position.y = at[1] - t * at[1];
+    });
+  });
+  return [0, 1, 2].map((i) => (
+    <mesh key={i} ref={(m) => { drops.current[i] = m; }} position={at} visible={false}>
+      <sphereGeometry args={[0.06, 12, 12]} />
+      <meshStandardMaterial color="#0284c7" />
+    </mesh>
+  ));
 }
 
 function Scene({ sim, dark, onToggleValve, onTogglePump }) {
   const palette = dark ? COLORS.dark : COLORS.light;
   const { flows, tanks, valves, leakFlow, segments, pumpOn } = sim;
-  const pipeFlow = [flows.f1, flows.f1, flows.f1, flows.f2, flows.f2];
+  const model = useModel();
+  const valveOpen = valves.A > 0;
 
-  const pipeColor = (segId) => {
-    const seg = segId && segments[segId];
-    if (seg?.leak) return '#f43f5e';
-    if (seg?.abnormalFor > 0) return '#fbbf24';
-    return palette.pipe;
+  useEffect(() => { showState(model, { pumpOn, valveOpen, segments }); }, [model, pumpOn, valveOpen, segments]);
+  useFrame((_, dt) => animate(model, { tanks, pumpOn }, dt));
+
+  const handleClick = (e) => {
+    const part = partOf(e.object);
+    if (!part) return;
+    e.stopPropagation();
+    if (part === 'pump') onTogglePump?.();
+    else onToggleValve?.('A', valveOpen ? 0 : 25);
+  };
+  const handleHover = (e) => {
+    const part = partOf(e.object);
+    document.body.style.cursor = part === 'valve' || (part === 'pump' && sim.mode === 'manual') ? 'pointer' : '';
   };
 
-  // Pipes run between the edges of the tanks, not their centres.
-  const ends = NODE_X.map((x, i) => (i === 0 ? x + TANK.r : i === NODE_X.length - 1 ? x - TANK.r : x));
+  const pipeFlow = [flows.f1, flows.f1, flows.f1, flows.f2, flows.f2];
+  const { labels } = model;
 
   return (
     <>
       <color attach="background" args={[palette.bg]} />
-      <ambientLight intensity={dark ? 0.55 : 0.8} />
-      <directionalLight position={[4, 8, 6]} intensity={dark ? 1.1 : 1.4} />
-      <directionalLight position={[-6, 4, -4]} intensity={0.35} />
+      <ambientLight intensity={dark ? 0.6 : 0.85} />
+      <directionalLight position={[4, 8, 6]} intensity={dark ? 1.2 : 1.5} />
+      <directionalLight position={[-6, 4, -4]} intensity={0.4} />
 
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]}>
         <planeGeometry args={[16, 6]} />
         <meshStandardMaterial color={palette.floor} />
       </mesh>
 
-      {pipeFlow.map((flow, i) => (
-        <Pipe key={i} from={ends[i]} to={ends[i + 1]} flow={flow} color={pipeColor(PIPE_SEGMENT[i])} />
-      ))}
+      <primitive
+        object={model.root}
+        onClick={handleClick}
+        onPointerMove={handleHover}
+        onPointerOut={() => { document.body.style.cursor = ''; }}
+      />
 
-      <Tank x={NODE_X[0]} percent={tanks.source} palette={palette} title="Source" />
-      <Pump on={pumpOn} manual={sim.mode === 'manual'} onToggle={onTogglePump} palette={palette} />
-      <Sensor x={NODE_X[2]} name="Sensor 1" flow={flows.f1} palette={palette} />
-      <Valve opening={valves.A} leaking={leakFlow.A > 0.05}
-        onToggle={() => onToggleValve?.('A', valves.A > 0 ? 0 : 25)} palette={palette} />
-      <Sensor x={NODE_X[4]} name="Sensor 2" flow={flows.f2} palette={palette} />
-      <Tank x={NODE_X[5]} percent={tanks.delivery} palette={palette} title="Delivery" />
+      {model.pipeRuns.map((run, i) => <FlowParticles key={i} run={run} flow={pipeFlow[i]} />)}
+      <Drips at={model.drip} active={leakFlow.A > 0.05} />
+
+      <Label position={labels.source} title="Source" value={`${Math.round(tanks.source)}%`} />
+      <Label position={labels.pump} title="Pump" value={pumpOn ? 'ON' : 'OFF'}
+        tone={pumpOn ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'} />
+      <Label position={labels.f1} title="Sensor 1" value={`${flows.f1.toFixed(2)} L/min`} />
+      <Label position={labels.valve} title="Valve A" value={`${valves.A}%`}
+        tone={valveOpen ? 'text-amber-600 dark:text-amber-400' : 'text-slate-400'} />
+      <Label position={labels.f2} title="Sensor 2" value={`${flows.f2.toFixed(2)} L/min`} />
+      <Label position={labels.delivery} title="Delivery" value={`${Math.round(tanks.delivery)}%`} />
 
       <OrbitControls
         makeDefault
@@ -230,6 +241,7 @@ function Scene({ sim, dark, onToggleValve, onTogglePump }) {
  * Drag to orbit, scroll or pinch to zoom. Click the pump (manual mode) or the valve, as in 2D.
  */
 export default function Twin3D({ sim, dark = false, onToggleValve, onTogglePump }) {
+  useEffect(() => () => { document.body.style.cursor = ''; }, []);
   return (
     <div
       className="w-full h-[300px] sm:h-[380px] rounded-xl overflow-hidden"
