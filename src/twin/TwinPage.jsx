@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Droplets,
@@ -36,6 +36,10 @@ import ReportModal from './ReportModal.jsx';
 import BridgeModal from './BridgeModal.jsx';
 import LiveStrip from './LiveStrip.jsx';
 import { useFirebaseBridge } from './useFirebaseBridge.js';
+
+// three.js is large, so the 3D view is only downloaded when someone switches to it.
+const Twin3D = lazy(() => import('./Twin3D.jsx'));
+const VIEWS = [{ id: '2d', name: '2D' }, { id: '3d', name: '3D' }];
 
 const LINK_LABEL = {
   off: 'Dashboard link', loading: 'Connecting…', connecting: 'Connecting…', signin: 'Sign in',
@@ -89,12 +93,15 @@ export default function TwinPage() {
   const [reportOpen, setReportOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(readInitialDark);
   const [tankStyle, setTankStyle] = useTankStyle();
+  const [view, setView] = useTankStyle('swampds_twin_view', VIEWS, '2d');
 
   const wide = useMediaQuery('(min-width: 1024px)');
   const outputs = useMemo(() => deriveOutputs(sim), [sim]);
   useBuzzer(outputs.buzzer, soundOn);
 
   useEffect(() => { saveTheme(darkMode); }, [darkMode]);
+
+  const togglePump = () => sim.mode === 'manual' && setManualCommand(sim.pumpOn ? 'off' : 'on');
 
   const chartData = useMemo(
     () =>
@@ -256,37 +263,70 @@ export default function TwinPage() {
             iconColorClass="text-slate-500 dark:text-slate-400"
           />
 
-          {/* Tank animation preference - saved to this browser (localStorage) */}
-          <div className="flex flex-wrap items-center gap-1.5 mb-3 -mt-1" role="radiogroup" aria-label="Tank animation style">
-            <span className="text-[11px] font-medium text-slate-400 dark:text-slate-500 mr-0.5">Tank style</span>
-            {TANK_STYLES.map(({ id, name }) => (
-              <button
-                key={id}
-                type="button"
-                role="radio"
-                aria-checked={tankStyle === id}
-                onClick={() => setTankStyle(id)}
-                className={`px-2.5 py-2 min-h-[36px] text-[11px] font-medium rounded-lg transition-colors cursor-pointer ${
-                  tankStyle === id
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
-                }`}
-              >
-                {name}
-              </button>
-            ))}
+          {/* View and tank animation preferences - saved to this browser (localStorage) */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-3 -mt-1">
+            <div className="flex items-center gap-1.5" role="radiogroup" aria-label="Pipeline view">
+              <span className="text-[11px] font-medium text-slate-400 dark:text-slate-500 mr-0.5">View</span>
+              {VIEWS.map(({ id, name }) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="radio"
+                  aria-checked={view === id}
+                  onClick={() => setView(id)}
+                  className={`px-2.5 py-2 min-h-[36px] text-[11px] font-medium rounded-lg transition-colors cursor-pointer ${
+                    view === id
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                  }`}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+
+            {view === '2d' && (
+            <div className="flex flex-wrap items-center gap-1.5" role="radiogroup" aria-label="Tank animation style">
+              <span className="text-[11px] font-medium text-slate-400 dark:text-slate-500 mr-0.5">Tank style</span>
+              {TANK_STYLES.map(({ id, name }) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="radio"
+                  aria-checked={tankStyle === id}
+                  onClick={() => setTankStyle(id)}
+                  className={`px-2.5 py-2 min-h-[36px] text-[11px] font-medium rounded-lg transition-colors cursor-pointer ${
+                    tankStyle === id
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                  }`}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+            )}
           </div>
 
-          <PipelineSchematic
-            sim={sim}
-            layout={wide ? 'full' : 'compact'}
-            tankStyle={tankStyle}
-            onToggleValve={(id, pct) => setValve(id, pct)}
-            onTogglePump={() =>
-              sim.mode === 'manual' &&
-              setManualCommand(sim.pumpOn ? 'off' : 'on')
-            }
-          />
+          {view === '3d' ? (
+            <Suspense
+              fallback={
+                <div className="w-full h-[300px] sm:h-[380px] rounded-xl bg-slate-100 dark:bg-slate-900 animate-pulse flex items-center justify-center text-xs text-slate-400">
+                  Loading 3D view…
+                </div>
+              }
+            >
+              <Twin3D sim={sim} dark={darkMode} onToggleValve={(id, pct) => setValve(id, pct)} onTogglePump={togglePump} />
+            </Suspense>
+          ) : (
+            <PipelineSchematic
+              sim={sim}
+              layout={wide ? 'full' : 'compact'}
+              tankStyle={tankStyle}
+              onToggleValve={(id, pct) => setValve(id, pct)}
+              onTogglePump={togglePump}
+            />
+          )}
         </Card>
 
         {/* Balanced Two-Column Layout */}
