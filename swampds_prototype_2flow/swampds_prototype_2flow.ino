@@ -27,6 +27,7 @@
 #include <WiFi.h>
 #include <Wire.h>
 #include <time.h>
+#include <esp_timer.h>
 #include <esp_system.h>
 #include <sys/time.h>
 #include <Adafruit_GFX.h>
@@ -39,20 +40,21 @@
 #include "secrets.h"
 
 #define DEVICE_ID      "SWAMPDS-ESP32-01"
-#define FW_VERSION     "1.2-2flow"
+#define FW_VERSION     "1.3-2flow"
 #define TZ_OFFSET_SEC  3600                             // Nigeria (WAT, UTC+1)
 
 // ======================= Pins =======================
-#define PIN_TRIG 5
+// Wiring guide (what goes where, and why these pins): README.md in this folder.
+#define PIN_TRIG 13
 #define PIN_ECHO 18
 const uint8_t FLOW_PINS[2] = {32, 33};                  // flow1 = nearest the pump, flow2 = downstream
 #define PIN_SDA 21
 #define PIN_SCL 22
-#define PIN_RELAY 15                                    // strapping pin: pulled up at boot, so the LOW-trigger relay stays off
+#define PIN_RELAY 23                                    // no boot-time activity, so the relay cannot click on during boot
 #define PIN_LED_GREEN 25
 #define PIN_LED_RED 26
 #define PIN_LED_YELLOW 27
-#define PIN_BUZZER 14
+#define PIN_BUZZER 4                                    // not 14: GPIO14 pulses at boot, which would chirp the buzzer
 #define RELAY_ACTIVE_HIGH false                         // 1-channel LOW-level-trigger module: IN pulled LOW = relay ON
 
 // ======================= Tunables — keep in step with src/twin/config.js and PUMP_THRESHOLDS =======================
@@ -79,9 +81,12 @@ const uint32_t DRY_RUN_SEC       = 15;
 const float DRY_RUN_MIN_FLOW     = 0.3;
 const uint32_t DRY_RUN_HOLD_MS   = 60000;
 const uint8_t SENSOR_FAULT_AFTER = 5;
+const float SOUND_CM_PER_US      = 0.0347;       // speed of sound at ~27 °C (Nigeria); 0.0343 is for 20 °C
 
 const uint32_t PUBLISH_MS = 2000;
 const uint32_t CONFIG_POLL_MS = 10000;                         // how often admin-set levels are re-read
+const uint32_t WIFI_RETRY_MS = 30000;                          // restart a Wi-Fi attempt only after this long: phone
+                                                               // hotspots can take over 10 s to let a device join
 
 // ======================= Globals =======================
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
@@ -89,9 +94,18 @@ FirebaseData fbdoWrite, fbdoModeStream, fbdoCmdStream;
 FirebaseAuth auth;
 FirebaseConfig config;
 
-volatile uint32_t flowPulses[2] = {0, 0};
-void IRAM_ATTR isr0() { flowPulses[0]++; }
-void IRAM_ATTR isr1() { flowPulses[1]++; }
+// A YF-S201 tops out near 225 pulses/s (30 L/min), i.e. one pulse every ~4.4 ms. Edges closer
+// together than MIN_PULSE_US are electrical noise, not water: they are counted as glitches instead.
+const uint32_t MIN_PULSE_US = 2000;
+volatile uint32_t flowPulses[2] = {0, 0}, flowGlitches[2] = {0, 0};
+volatile uint32_t lastPulseUs[2] = {0, 0};
+void IRAM_ATTR countPulse(int i) {
+  uint32_t t = (uint32_t)esp_timer_get_time();
+  if (t - lastPulseUs[i] >= MIN_PULSE_US) { lastPulseUs[i] = t; flowPulses[i]++; }
+  else flowGlitches[i]++;
+}
+void IRAM_ATTR isr0() { countPulse(0); }
+void IRAM_ATTR isr1() { countPulse(1); }
 
 enum Status { S_NORMAL, S_WARNING, S_LEAK };
 
@@ -143,7 +157,7 @@ uint32_t lastOledCheck = 0;
 // Hardware check (Serial Monitor). Counters cover the time since the last report.
 const uint32_t HW_REPORT_MS = 10000;
 uint32_t lastHwReport = 0;
-uint32_t hwFlowPulses[2] = {0, 0};
+uint32_t hwFlowPulses[2] = {0, 0}, hwFlowGlitches[2] = {0, 0};
 uint16_t hwPumpOnSec = 0, hwRelaySwitches = 0;
 uint8_t lastEchoes = 0;           // valid echoes (of 5) in the latest level reading
 float lastDistCm = -1;            // sensor-to-water distance of the latest good reading
@@ -228,13 +242,15 @@ float pingCm() {
   digitalWrite(PIN_TRIG, LOW);  delayMicroseconds(2);
   digitalWrite(PIN_TRIG, HIGH); delayMicroseconds(10);
   digitalWrite(PIN_TRIG, LOW);
-  long d = pulseIn(PIN_ECHO, HIGH, 30000);
-  return d == 0 ? -1.0f : d * 0.0343f / 2.0f;
+  long d = pulseIn(PIN_ECHO, HIGH, 30000);              // no echo within 30 ms (~5 m) = missed
+  return d == 0 ? -1.0f : d * SOUND_CM_PER_US / 2.0f;   // there and back, so halve it
 }
 
 void readLevel() {
   float s[5]; int n = 0;
-  for (int i = 0; i < 5; i++) { float x = pingCm(); if (x >= 2 && x <= 400) s[n++] = x; delay(30); }
+  // 60 ms between pings (the HC-SR04 datasheet minimum): in a small tank the last ping keeps bouncing
+  // off the walls for a while, and a shorter gap can pick up those old echoes as false readings.
+  for (int i = 0; i < 5; i++) { float x = pingCm(); if (x >= 2 && x <= 400) s[n++] = x; delay(60); }
   lastEchoes = n;
   if (n < 3) { if (++badReads >= SENSOR_FAULT_AFTER) sensorFault = true; return; }
   badReads = 0; sensorFault = false; levelKnown = true;
@@ -247,7 +263,11 @@ void readLevel() {
 
 void calcFlows(uint32_t dtMs) {
   uint32_t p[2];
-  noInterrupts(); for (int i = 0; i < 2; i++) { p[i] = flowPulses[i]; flowPulses[i] = 0; } interrupts();
+  uint32_t g[2];
+  noInterrupts();
+  for (int i = 0; i < 2; i++) { p[i] = flowPulses[i]; flowPulses[i] = 0; g[i] = flowGlitches[i]; flowGlitches[i] = 0; }
+  interrupts();
+  for (int i = 0; i < 2; i++) hwFlowGlitches[i] += g[i];
   for (int i = 0; i < 2; i++) { flow[i] = (p[i] * 1000.0f / dtMs) / FLOW_K[i]; hwFlowPulses[i] += p[i]; }
 }
 
@@ -366,8 +386,8 @@ void reportConnection(uint32_t now) {
   bool up = WiFi.status() == WL_CONNECTED;
   if (up != wifiUp) {
     wifiUp = up;
-    if (up) Serial.printf("\n>>> Connected to Wi-Fi \"%s\" | IP %s | signal %d dBm\n",
-                          WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
+    if (up) Serial.printf("\n>>> Connected to Wi-Fi \"%s\" after %.1f s | IP %s | signal %d dBm\n",
+                          WiFi.SSID().c_str(), now / 1000.0f, WiFi.localIP().toString().c_str(), WiFi.RSSI());
     else    Serial.printf("\n>>> Wi-Fi lost, reconnecting to \"%s\"...\n", WIFI_SSID);
     snapshotDue = true;
   } else if (!up && now - lastWifiWaitMsg >= 3000) {
@@ -381,7 +401,7 @@ void reportConnection(uint32_t now) {
   }
   if (up && !firebaseAnnounced && online()) {
     firebaseAnnounced = true;
-    Serial.println(">>> Firebase connected - live data is going to the dashboard");
+    Serial.printf(">>> Firebase connected after %.1f s - live data is going to the dashboard\n", now / 1000.0f);
   }
 }
 
@@ -462,7 +482,10 @@ void flowLine(int i, String &problems) {
   const char *name = i == 0 ? "Flow 1" : "Flow 2";
   uint32_t p = hwFlowPulses[i];
   String pin = String("GPIO") + FLOW_PINS[i];
-  if (i == 0 && holdActive(millis()))   // the dry-run stop is itself proof flow 1 saw no water
+  if (hwFlowGlitches[i] > 50)   // edges far faster than any water flow: the signal wire is floating or picking up noise
+    hwLine(name, false, String(hwFlowGlitches[i]) + " noise pulses ignored on " + pin + ". The signal is not a clean 0 V / 3.3 V:" +
+           " check the yellow wire and red 5V wire are firmly connected, the divider is complete, and keep it away from pump wires", problems);
+  else if (i == 0 && holdActive(millis()))   // the dry-run stop is itself proof flow 1 saw no water
     hwLine(name, false, "the pump ran " + String(DRY_RUN_SEC) + " s with no flow here and was stopped. Water moving? If yes, check red->5V, black->GND, yellow->divider->" + pin + ", arrow points with the flow", problems);
   else if (hwPumpOnSec >= 5 && p == 0)
     hwLine(name, false, "pump ran " + String(hwPumpOnSec) + " s but no pulses on " + pin +
@@ -492,12 +515,12 @@ void hardwareReport() {
   else {
     String seen = "";
     for (uint8_t a = 1; a < 127; a++) { Wire.beginTransmission(a); if (Wire.endTransmission() == 0) seen += " 0x" + String(a, HEX); }
-    hwLine("OLED", false, "not found. Check SDA->GPIO21, SCL->GPIO22 (try swapping), VCC->3.3V, GND. I2C devices seen:" +
+    hwLine("OLED", false, "not found. Check SDA->GPIO" + String(PIN_SDA) + ", SCL->GPIO" + PIN_SCL + " (try swapping), VCC->3.3V, GND. I2C devices seen:" +
            (seen.length() ? seen + " (wrong address, or not an SSD1306)" : String(" none")), problems);
   }
 
   if (lastEchoes == 0)
-    hwLine("Level sensor", false, "no echo at all. Check TRIG->GPIO5, ECHO->divider->GPIO18, VCC->5V, GND", problems);
+    hwLine("Level sensor", false, "no echo at all. Check TRIG->GPIO" + String(PIN_TRIG) + ", ECHO->divider->GPIO" + PIN_ECHO + ", VCC->5V, GND", problems);
   else if (lastEchoes < 3)
     hwLine("Level sensor", false, "unstable, " + String(lastEchoes) + "/5 echoes. Loose wire, or not aimed straight at the water", problems);
   else if (lastDistCm > SENSOR_TO_BOTTOM_CM + 3)
@@ -527,7 +550,7 @@ void hardwareReport() {
   else                   Serial.println("  >>> All hardware OK");
   Serial.println("----------------------------------------------------------------");
 
-  hwFlowPulses[0] = hwFlowPulses[1] = 0; hwPumpOnSec = 0; hwRelaySwitches = 0;
+  hwFlowPulses[0] = hwFlowPulses[1] = 0; hwFlowGlitches[0] = hwFlowGlitches[1] = 0; hwPumpOnSec = 0; hwRelaySwitches = 0;
 }
 
 void updateDisplay() {
@@ -608,8 +631,12 @@ void setup() {
   pinMode(PIN_TRIG, OUTPUT); pinMode(PIN_ECHO, INPUT);
   ledcAttach(PIN_BUZZER, 2000, 8); ledcWriteTone(PIN_BUZZER, 0);
 
-  pinMode(FLOW_PINS[0], INPUT_PULLUP);
-  pinMode(FLOW_PINS[1], INPUT_PULLUP);
+  // Plain INPUT, no internal pull-up: behind the 10k/20k divider, the pull-up holds a line the sensor is not
+  // driving at ~1.0 V, between LOW and HIGH, and noise then fires thousands of fake pulses a second.
+  // Without it, the divider's 20k pulls an undriven line cleanly to 0 V. (If a sensor gives no pulses at all
+  // with water flowing, its output needs a pull-up: 10k from the yellow wire to 5 V, before the divider.)
+  pinMode(FLOW_PINS[0], INPUT);
+  pinMode(FLOW_PINS[1], INPUT);
   attachInterrupt(digitalPinToInterrupt(FLOW_PINS[0]), isr0, RISING);
   attachInterrupt(digitalPinToInterrupt(FLOW_PINS[1]), isr1, RISING);
   // GPIO34 (formerly flow3) is now free — available if you add a sensor back later.
@@ -643,7 +670,7 @@ void setup() {
 void loop() {
   uint32_t now = millis();
 
-  if (WiFi.status() != WL_CONNECTED && now - lastWifiRetry > 10000) {
+  if (WiFi.status() != WL_CONNECTED && now - lastWifiRetry > WIFI_RETRY_MS) {
     WiFi.disconnect(); WiFi.reconnect(); lastWifiRetry = now;
   }
   reportConnection(now);
