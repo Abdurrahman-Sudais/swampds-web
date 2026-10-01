@@ -9,7 +9,7 @@ test('the default pump levels are allowed', () => {
 
 test('pump levels cannot go past the safe limits', () => {
   assert.match(validatePumpThresholds(1, 8), /at least 1.5 cm/);
-  assert.match(validatePumpThresholds(2, 12.5), /at most 12 cm/);
+  assert.match(validatePumpThresholds(2, 14), /at most 13.5 cm/);
   assert.match(validatePumpThresholds(2, FULL_SCALE_CM + 5), /at most/);
   assert.match(validatePumpThresholds(5, 6.5), /at least 2 cm above/);
   assert.match(validatePumpThresholds(NaN, 8), /numbers/);

@@ -43,7 +43,7 @@ Defined in [`src/twin/contract.js`](src/twin/contract.js). Real hardware should 
 | `pumpHistory/<id>` | device | `{ date, start, end, duration, startTimestamp }` |
 | `status/controlMode` | dashboard | `auto` \| `manual` |
 | `control/pumpCommand` | dashboard | `on` \| `off` (manual mode only) |
-| `config/pumpOnCm`, `pumpOffCm` | dashboard (admins, Settings page) | auto-pump levels in cm; absent = firmware defaults (2 / 12). Limits: ON ≥ 1.5, OFF ≤ 12, OFF ≥ ON + 2 - enforced by the Settings page, the database rules and the firmware |
+| `config/pumpOnCm`, `pumpOffCm` | dashboard (admins, Settings page) | auto-pump levels in cm; absent = firmware defaults (2 / 13.5). Limits: ON ≥ 1.5, OFF ≤ 13.5, OFF ≥ ON + 2 - enforced by the Settings page, the database rules and the firmware |
 | `hardware/pumpOnCm`, `pumpOffCm` | device | the levels the ESP32 is actually using, so Settings can confirm a change took effect |
 | `twinLock` | twin | single-publisher lock |
 
@@ -55,7 +55,7 @@ Arduino IDE: the sketch must be in a folder named `swampds_prototype_2flow` (wit
 
 The leak rule (20% of F1's flow missing at F2 for 10 s) and the tank settings are set in the firmware and mirrored in [`src/twin/config.js`](src/twin/config.js), which the dashboard also reads. Change both together.
 
-Tank: 18 cm tall, the ultrasonic sensor's face sits 1.2 cm below the rim, and 4.3 cm is left as allowance under it, so the highest safe level is 12.5 cm (= 100%). By default auto mode starts the pump at 2 cm (16%) and stops it at 12 cm (96%); admins can change both on the Settings page within the safe limits, and the ESP32 picks the change up within ~10 s.
+Tank: 19 cm tall, the ultrasonic sensor's face sits 1.2 cm below the rim, and 3.8 cm is left as allowance under it, so the highest safe level is 14 cm (= 100%). By default auto mode starts the pump at 2 cm (14%) and stops it at 13.5 cm (96%); admins can change both on the Settings page within the safe limits, and the ESP32 picks the change up within ~10 s.
 
 Before first power-on with the pump connected, check:
 - **Relay**: a 1-channel LOW-level-trigger module (`RELAY_ACTIVE_HIGH` is `false`: IN pulled LOW = relay on). Wire the pump through the **NO** (normally open) terminal, so the pump only runs while the relay is energised. With the pump unplugged, boot the board: the relay must stay off (LED off, no click), then use Start/Stop in manual mode to hear it switch.

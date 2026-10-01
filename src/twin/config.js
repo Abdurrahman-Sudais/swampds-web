@@ -7,13 +7,13 @@
 
 // Delivery tank geometry on the prototype, in cm (same names and values as the firmware).
 // The ultrasonic sensor sits inside the tank, so the highest level it can safely measure is
-// below the rim: 18 - 1.2 (sensor) - 4.3 (allowance under it; ~2 cm is its blind zone) = 12.5 cm = 100 %.
-export const TANK_HEIGHT_CM      = 18;
+// below the rim: 19 - 1.2 (sensor) - 3.8 (allowance under it; ~2 cm is its blind zone) = 14 cm = 100 %.
+export const TANK_HEIGHT_CM      = 19;
 export const SENSOR_DROP_CM      = 1.2;
-export const SENSOR_CLEARANCE_CM = 4.3;
-export const FULL_SCALE_CM       = TANK_HEIGHT_CM - SENSOR_DROP_CM - SENSOR_CLEARANCE_CM; // 12.5
-export const PUMP_ON_CM          = 2;                   // 16 %
-export const PUMP_OFF_CM         = FULL_SCALE_CM - 0.5; // 12 cm = 96 %
+export const SENSOR_CLEARANCE_CM = 3.8;
+export const FULL_SCALE_CM       = TANK_HEIGHT_CM - SENSOR_DROP_CM - SENSOR_CLEARANCE_CM; // 14
+export const PUMP_ON_CM          = 2;                   // 14 %
+export const PUMP_OFF_CM         = FULL_SCALE_CM - 0.5; // 13.5 cm = 96 %
 
 /**
  * Limits for admin-set pump thresholds (Settings page). The same limits are enforced by the
@@ -22,7 +22,7 @@ export const PUMP_OFF_CM         = FULL_SCALE_CM - 0.5; // 12 cm = 96 %
  */
 export const PUMP_LIMITS = {
   minOnCm:  1.5,          // above the 1 cm low-level warning, so a normal refill never raises it
-  maxOffCm: PUMP_OFF_CM,  // 12 cm: stop no higher than 0.5 cm below the highest safe level
+  maxOffCm: PUMP_OFF_CM,  // 13.5 cm: stop no higher than 0.5 cm below the highest safe level
   minGapCm: 2,            // start and stop at least 2 cm apart, or sensor noise can make the pump cycle
 };
 
@@ -63,8 +63,8 @@ export const DEFAULT_CONFIG = {
   persistSec: 10,          // abnormal difference must last this long to be a LEAK
 
   // Pump control
-  lowLevelPct: (PUMP_ON_CM / FULL_SCALE_CM) * 100,   // auto mode: pump ON at or below (2 cm = 16 %)
-  fullLevelPct: (PUMP_OFF_CM / FULL_SCALE_CM) * 100, // auto mode: pump OFF at or above (12 cm = 96 %)
+  lowLevelPct: (PUMP_ON_CM / FULL_SCALE_CM) * 100,   // auto mode: pump ON at or below (2 cm = 14 %)
+  fullLevelPct: (PUMP_OFF_CM / FULL_SCALE_CM) * 100, // auto mode: pump OFF at or above (13.5 cm = 96 %)
   sourceEmptyPct: 2,       // pump stops (dry-run protection) at or below this source level
 
   // Display
