@@ -1,6 +1,8 @@
 /**
  * @fileoverview Connects the digital twin to Firebase so it stands in for the ESP32:
  * it publishes sensor/status/alert/history data, and obeys the dashboard's commands.
+ * When the prototype is online it also runs hardware-in-the-loop: the real level sensor
+ * (hardware/levelCm) feeds the twin, and the ESP32 mirrors the twin's outputs (hil/).
  *
  * Framework-free. The Firebase functions are injected (`api`), so the same code runs
  * against the real SDK in the browser and an in-memory fake in tests.
@@ -10,7 +12,7 @@
 import {
   toSnapshot, flatten, shouldPublishEvent, eventToAlert, connectionAlert,
   createPumpTracker, trackPump, controlIntents, canAcquireLock, pumpLevelsFromDb,
-  PUBLISH_INTERVAL_MS,
+  measuredLevelPct, PUBLISH_INTERVAL_MS, HARDWARE_STALE_MS,
 } from './contract.js';
 
 const norm = (v) => (typeof v === 'string' ? v.toLowerCase() : null);
@@ -25,6 +27,7 @@ const norm = (v) => (typeof v === 'string' ? v.toLowerCase() : null);
  *   getConfig: () => object,
  *   applyIntent: (intent: object) => void,   apply a dashboard command to the twin
  *   applyConfig?: (patch: object) => void,   apply admin-set pump levels (config/) to the twin
+ *   applyMeasuredLevel?: (pct: number|null) => void,   real delivery level from the prototype, null = none
  *   onStatus: (status: object) => void,
  *   now?: () => number,
  *   setIntervalFn?: Function, clearIntervalFn?: Function,
@@ -32,7 +35,8 @@ const norm = (v) => (typeof v === 'string' ? v.toLowerCase() : null);
  */
 export function createBridge(deps) {
   const {
-    api, db, clientId, identity, getSim, getConfig, applyIntent, applyConfig = () => {}, onStatus,
+    api, db, clientId, identity, getSim, getConfig, applyIntent, applyConfig = () => {},
+    applyMeasuredLevel = () => {}, onStatus,
     now = Date.now, setIntervalFn = setInterval, clearIntervalFn = clearInterval,
   } = deps;
   const { ref, update, push, remove, onValue, runTransaction, onDisconnect } = api;
@@ -47,6 +51,8 @@ export function createBridge(deps) {
   let lastEventId = 0;
   let tracker = createPumpTracker();
   let offlineHandler = null;
+  let hilHandler = null;
+  const hw = { value: null, lastSeen: null, receivedAt: null }; // latest hardware/, and when it last changed (local time)
   const dbControl = { mode: null, cmd: null }; // what the database currently holds
   let dbConfig = null;                         // latest config/ (admin-set pump levels)
 
@@ -55,6 +61,12 @@ export function createBridge(deps) {
   /** Best-effort: a failed connection-log write must never block connecting or disconnecting. */
   const logConnection = (kind, timestamp) =>
     push(ref(db, 'alerts'), connectionAlert(kind, identity.email, timestamp)).catch(() => {});
+
+  /** The real level while the ESP32 keeps reporting; null once it goes quiet or reports a fault. */
+  function currentMeasuredLevel(t) {
+    if (hw.receivedAt === null || t - hw.receivedAt > HARDWARE_STALE_MS) return null;
+    return measuredLevelPct(hw.value, getConfig());
+  }
 
   async function fail(error) {
     status('error', { message: error?.message ?? String(error) });
@@ -95,6 +107,9 @@ export function createBridge(deps) {
 
       offlineHandler = onDisconnect(ref(db, 'system/online'));
       await offlineHandler.set(false);
+      // If this tab dies, the prototype stops mirroring at once instead of waiting out its timeout
+      hilHandler = onDisconnect(ref(db, 'hil'));
+      await hilHandler.remove();
 
       unsubs = [
         onValue(ref(db, 'status/controlMode'), (snap) => {
@@ -109,6 +124,14 @@ export function createBridge(deps) {
           dbConfig = snap.val();
           if (running) applyConfig(pumpLevelsFromDb(dbConfig));
         }),
+        onValue(ref(db, 'hardware'), (snap) => {
+          const value = snap.val();
+          const lastSeen = value?.lastSeen ?? null;
+          if (lastSeen !== null && lastSeen !== hw.lastSeen) hw.receivedAt = now();
+          hw.value = value;
+          hw.lastSeen = lastSeen;
+          if (running) applyMeasuredLevel(currentMeasuredLevel(now()));
+        }),
         onValue(lockRef, (snap) => {
           const lock = snap.val();
           if (running && lock && lock.clientId !== clientId) {
@@ -120,6 +143,7 @@ export function createBridge(deps) {
 
       running = true;
       applyConfig(pumpLevelsFromDb(dbConfig)); // the levels already set before this twin connected
+      applyMeasuredLevel(currentMeasuredLevel(t));
       logConnection('connected', t); // visible on the dashboard: an alert, not just the "simulated data" banner
       await publish();
       timer = setIntervalFn(() => { publish().catch(fail); }, PUBLISH_INTERVAL_MS);
@@ -142,8 +166,10 @@ export function createBridge(deps) {
     unsubs.forEach((unsubscribe) => unsubscribe());
     unsubs = [];
 
+    if (wasRunning) applyMeasuredLevel(null); // no longer receiving the prototype's readings
     if (wasRunning && release) {
       try {
+        await remove(ref(db, 'hil'));          // the prototype stops mirroring this twin
         await logConnection('disconnected', now());
         await runTransaction(lockRef, (current) => (current?.clientId === clientId ? null : undefined));
         await update(root(), { 'system/online': false });
@@ -151,7 +177,9 @@ export function createBridge(deps) {
     }
     // Always cancel: a displaced twin must not flip the new owner's "online" flag when it closes.
     try { await offlineHandler?.cancel(); } catch { /* ignore */ }
+    try { await hilHandler?.cancel(); } catch { /* ignore */ }
     offlineHandler = null;
+    hilHandler = null;
     if (!silent) status('off');
   }
 
@@ -162,6 +190,7 @@ export function createBridge(deps) {
     publishing = true;
     try {
       const t = now();
+      applyMeasuredLevel(currentMeasuredLevel(t)); // unlinks the level once the ESP32 goes quiet
       const sim = getSim();
 
       // Advance the pump-session tracker first, so this tick's snapshot carries an up-to-date

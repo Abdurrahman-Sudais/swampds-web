@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { FlaskConical, WifiOff } from 'lucide-react';
+import { Cpu, FlaskConical, WifiOff } from 'lucide-react';
 import { describeDataSource } from '../../twin/contract.js';
 
 /**
  * Tells the operator where the dashboard's data comes from:
  *  - simulated: the Digital Twin is publishing (not physical hardware)
+ *  - hybrid:    the Digital Twin is publishing with the prototype linked (real level, real outputs)
  *  - offline:   the publisher stopped sending, so the values on screen are the last ones received
  * Shows nothing for ordinary live data.
  *
@@ -28,6 +29,17 @@ export default function DataSourceBanner({ meta }) {
       <div role="status" className="flex-shrink-0 flex items-center gap-2 px-4 sm:px-6 py-2 bg-slate-800 text-slate-100 text-xs sm:text-sm">
         <WifiOff className="w-4 h-4 flex-shrink-0" />
         <span><strong>{who}</strong>{ago}. The values shown are the last ones received.</span>
+      </div>
+    );
+  }
+
+  if (info.kind === 'hybrid') {
+    return (
+      <div role="status" className="flex-shrink-0 flex items-center gap-2 px-4 sm:px-6 py-2 bg-sky-50 text-sky-900 text-xs sm:text-sm border-b border-sky-100">
+        <Cpu className="w-4 h-4 flex-shrink-0" />
+        <span>
+          <strong>Hardware-in-the-loop.</strong> Water level, pump and alarms are on the prototype; flow readings come from the Digital Twin model.
+        </span>
       </div>
     );
   }

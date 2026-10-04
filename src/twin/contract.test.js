@@ -2,10 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { DEFAULT_CONFIG as CFG } from './config.js';
-import { createInitialState, step, setValve, setMode } from './engine.js';
+import { createInitialState, step, setValve, setMode, setMeasuredLevel } from './engine.js';
 import {
   toSnapshot, flatten, shouldPublishEvent, eventToAlert, connectionAlert, formatDuration,
-  createPumpTracker, trackPump, controlIntents, canAcquireLock, describeDataSource,
+  createPumpTracker, trackPump, controlIntents, canAcquireLock, describeDataSource, measuredLevelPct,
   DATA_SOURCE, LOCK_TTL_MS, STALE_AFTER_MS,
 } from './contract.js';
 
@@ -136,4 +136,28 @@ test('the dashboard says where its data comes from and when it goes quiet', () =
   const real = describeDataSource({ source: 'esp32', online: true, receivedAt: now - 1000 }, now);
   assert.equal(real.kind, 'live');
   assert.equal(real.simulated, false);
+});
+
+test('snapshot carries the outputs the prototype mirrors (hil/) and whether hardware is linked', () => {
+  let sim = setValve(createInitialState(), 'A', 100);
+  sim = run(sim, 40);                                       // leak confirmed, pump cut
+  const snap = toSnapshot(sim, CFG, 7_000);
+  assert.deepEqual(snap.hil, { status: 'LEAK', pump: false, heartbeat: 7_000 });
+  assert.equal(snap.system.hardwareLinked, false);
+  assert.equal(toSnapshot(setMeasuredLevel(sim, 30), CFG, 7_000).system.hardwareLinked, true);
+});
+
+test('hardware level: cm -> % of the safe level, nothing on a fault or missing reading', () => {
+  assert.equal(measuredLevelPct({ levelCm: CFG.deliveryHeightCm / 2 }, CFG), 50);
+  assert.equal(measuredLevelPct({ levelCm: 99 }, CFG), 100);
+  assert.equal(measuredLevelPct({ levelCm: 5, levelFault: true }, CFG), null);
+  assert.equal(measuredLevelPct({ pumpOnCm: 2 }, CFG), null, 'old firmware without levelCm');
+  assert.equal(measuredLevelPct(null, CFG), null);
+});
+
+test('data source says hybrid when the twin publishes with hardware linked', () => {
+  const now = 100_000;
+  const meta = { source: DATA_SOURCE, online: true, hardwareLinked: true, receivedAt: now - 1000 };
+  assert.equal(describeDataSource(meta, now).kind, 'hybrid');
+  assert.equal(describeDataSource({ ...meta, online: false }, now).kind, 'offline');
 });

@@ -14,6 +14,16 @@
   Pins, libraries, and setup are otherwise identical to the 3-sensor
   version — see that file's header comment for board/IDE setup.
 
+  Twin link (hardware-in-the-loop): while the Digital Twin is connected to the
+  dashboard it publishes hil/{status, pump, heartbeat}. This board then FOLLOWS it:
+  the LEDs, buzzer and pump relay mirror the twin, its own leak / dry-run logic is
+  paused (the twin does the detection), and it stops publishing sensors/ and system/
+  (the twin publishes those). It keeps reading the ultrasonic sensor and publishes
+  hardware/levelCm, which the twin uses as its delivery-tank level. A local overflow
+  guard still has the last word on the pump. If the heartbeat stops changing for
+  HIL_TIMEOUT_MS (or hil/ is removed), the pump stops and the board goes back to
+  running on its own sensors.
+
   Credentials live in secrets.h (git-ignored). Copy secrets.example.h to
   secrets.h in this folder and fill it in before compiling.
 
@@ -40,7 +50,7 @@
 #include "secrets.h"
 
 #define DEVICE_ID      "SWAMPDS-ESP32-01"
-#define FW_VERSION     "1.3-2flow"
+#define FW_VERSION     "1.4-2flow-hil"
 #define TZ_OFFSET_SEC  3600                             // Nigeria (WAT, UTC+1)
 
 // ======================= Pins =======================
@@ -85,6 +95,8 @@ const float SOUND_CM_PER_US      = 0.0347;       // speed of sound at ~27 °C (N
 
 const uint32_t PUBLISH_MS = 2000;
 const uint32_t CONFIG_POLL_MS = 10000;                         // how often admin-set levels are re-read
+const uint32_t HIL_POLL_MS = 1000;                             // how often hil/ (the twin's outputs) is read
+const uint32_t HIL_TIMEOUT_MS = 8000;                          // twin heartbeat unchanged this long = stop following
 const uint32_t WIFI_RETRY_MS = 30000;                          // restart a Wi-Fi attempt only after this long: phone
                                                                // hotspots can take over 10 s to let a device join
 
@@ -143,6 +155,13 @@ bool leakFieldSet = true, pumpStartFieldSet = true;
 volatile bool modeEvent = false, cmdEvent = false;
 String pendingMode, pendingCmd;
 bool modeKnown = false, cmdKnown = false, streamsStarted = false, bootAnnounced = false;
+
+// Twin link (hardware-in-the-loop). The heartbeat is compared as text: only a change matters,
+// so the twin's clock never has to agree with this one.
+bool following = false;
+String hilStatus = "NORMAL", hilBeat = "";
+bool hilPump = false;
+uint32_t hilBeatAt = 0, lastHilPoll = 0;   // hilBeatAt 0 = no live twin
 
 bool snapshotDue = false;
 uint32_t lastTick = 0, lastPublish = 0, lastWifiRetry = 0, lastWifiWaitMsg = 0;
@@ -211,6 +230,7 @@ void pushAlert(const char *severity, const String &message) {
 
 void logPumpRun() {
   int64_t end = nowMs();
+  if (following) return;                                // the twin logs the runs it drives
   if (!online() || pumpStartedMs == 0 || end == 0) return;
   FirebaseJson j;
   j.set("date", fmtDate(pumpStartedMs));
@@ -234,6 +254,7 @@ void setPump(bool on) {
 }
 
 void writePumpCommand(const char *v) {
+  if (following) return;                                // the twin owns the command while it drives the board
   if (online()) Firebase.RTDB.setString(&fbdoWrite, "control/pumpCommand", v);
 }
 
@@ -370,6 +391,47 @@ void handleStreamEvents() {
 void streamModeCb(FirebaseStream d) { if (d.dataType() == "string") { pendingMode = d.stringData(); modeEvent = true; } }
 void streamCmdCb(FirebaseStream d)  { if (d.dataType() == "string") { pendingCmd  = d.stringData(); cmdEvent  = true; } }
 void streamTimeoutCb(bool t) { if (t) Serial.println("stream timeout, resuming"); }
+
+// ======================= Twin link (hardware-in-the-loop) =======================
+void pollHil(uint32_t now) {
+  if (!online()) return;
+  if (!Firebase.RTDB.get(&fbdoWrite, "hil")) return;    // read error: keep the last state, the timeout covers it
+  if (fbdoWrite.dataType() != "json") { hilBeatAt = 0; return; }   // hil/ removed: the twin disconnected
+  FirebaseJson *j = fbdoWrite.to<FirebaseJson *>();
+  FirebaseJsonData st, pump, beat;
+  j->get(st, "status"); j->get(pump, "pump"); j->get(beat, "heartbeat");
+  if (!st.success || !pump.success || !beat.success) return;
+  hilStatus = st.stringValue;
+  hilPump = pump.boolValue;
+  if (beat.stringValue != hilBeat) { hilBeat = beat.stringValue; hilBeatAt = now ? now : 1; }
+}
+
+void updateFollowing(uint32_t now) {
+  bool want = hilBeatAt != 0 && now - hilBeatAt < HIL_TIMEOUT_MS;
+  if (want == following) return;
+  if (want) {
+    following = true;
+    leakA = false; overSinceA = 0; dryRunHoldActive = false;   // the twin does the detection now
+    Serial.println(">>> Following the Digital Twin: LEDs, buzzer and pump mirror it");
+  } else {
+    setPump(false);                                     // while still following, so the run is not logged twice
+    following = false;
+    hilBeatAt = 0;
+    manualCommand = "off";
+    status = S_NORMAL; prevStatus = S_NORMAL; prevLeakStr = ""; prevWarnReason = "";
+    Serial.println(">>> Digital Twin gone: pump stopped, back on this board's own sensors");
+    pushAlert("info", "Prototype stopped following the Digital Twin and is running on its own sensors.");
+  }
+  snapshotDue = true;
+}
+
+void runFollow() {
+  status = hilStatus == "LEAK" ? S_LEAK : hilStatus == "WARNING" ? S_WARNING : S_NORMAL;
+  // The twin decides, but the real tank has the last word: never pump into a full tank or blind.
+  bool safe = levelKnown && !sensorFault && levelCm < DELIVERY_HEIGHT_CM;
+  setPump(hilPump && safe);
+  prevStatus = status; prevLeakStr = ""; prevWarnReason = "";
+}
 
 // ======================= Connection report (Serial Monitor, 115200 baud) =======================
 const char *wifiReason(wl_status_t s) {
@@ -559,8 +621,9 @@ void updateDisplay() {
   if (wifiUp) display.printf("IP %s\n", WiFi.localIP().toString().c_str());
   else        display.println("WiFi connecting...");
   display.printf("Level %d%%  %.1fcm\n", (int)round(levelPct), levelCm);
-  display.printf("F1 %.1f  F2 %.1f\n", flow[0], flow[1]);
-  display.printf("Pump %s  %s\n", pumpOn ? "ON" : "OFF", modeAuto ? "AUTO" : "MANUAL");
+  if (following) display.println("Flow: twin model");
+  else           display.printf("F1 %.1f  F2 %.1f\n", flow[0], flow[1]);
+  display.printf("Pump %s  %s\n", pumpOn ? "ON" : "OFF", following ? "TWIN" : modeAuto ? "AUTO" : "MANUAL");
   const char *st = status == S_LEAK ? "LEAK" : status == S_WARNING ? "WARNING" : "NORMAL";
   display.printf("%s %s\n", st, leakString().c_str());
   if (sensorFault) display.println("Level sensor fault");
@@ -573,23 +636,30 @@ float r1(float v) { return roundf(v * 10.0f) / 10.0f; }
 void publishSnapshot() {
   if (!online()) return;
   FirebaseJson root;
-  root.set("sensors/flow1", r1(flow[0]));
-  root.set("sensors/flow2", r1(flow[1]));
-  // No sensors/flow3 — the 2-sensor dashboard/twin must not expect this field.
-  root.set("sensors/waterLevelPercent", (int)round(levelPct));
-  root.set("sensors/waterLevelCm", r1(levelCm));
-  root.set("sensors/lastUpdated/.sv", "timestamp");
-
-  root.set("system/status", status == S_LEAK ? "LEAK" : status == S_WARNING ? "WARNING" : "NORMAL");
-  root.set("system/pumpState", pumpOn ? "ON" : "OFF");
-  root.set("system/pumpMode", modeAuto ? "AUTO" : "MANUAL");
-  root.set("system/source", "esp32");
-  root.set("system/online", true);
   String ls = leakString();
   bool hasLeak = ls.length() > 0;
   bool hasStart = pumpOn && pumpStartedMs;
-  if (hasLeak) root.set("system/leakSegments", ls);   // only ever "A"; deleted below when it clears
-  if (hasStart) root.set("system/pumpStartedAt", (double)pumpStartedMs);
+  // While following, the twin publishes sensors/ and system/: writing them too would make them flicker.
+  if (!following) {
+    root.set("sensors/flow1", r1(flow[0]));
+    root.set("sensors/flow2", r1(flow[1]));
+    // No sensors/flow3 — the 2-sensor dashboard/twin must not expect this field.
+    root.set("sensors/waterLevelPercent", (int)round(levelPct));
+    root.set("sensors/waterLevelCm", r1(levelCm));
+    root.set("sensors/lastUpdated/.sv", "timestamp");
+
+    root.set("system/status", status == S_LEAK ? "LEAK" : status == S_WARNING ? "WARNING" : "NORMAL");
+    root.set("system/pumpState", pumpOn ? "ON" : "OFF");
+    root.set("system/pumpMode", modeAuto ? "AUTO" : "MANUAL");
+    root.set("system/source", "esp32");
+    root.set("system/online", true);
+    if (hasLeak) root.set("system/leakSegments", ls);   // only ever "A"; deleted below when it clears
+    if (hasStart) root.set("system/pumpStartedAt", (double)pumpStartedMs);
+  }
+
+  root.set("hardware/levelCm", r1(levelCm));            // the twin's delivery-tank level
+  root.set("hardware/levelFault", sensorFault || !levelKnown);
+  root.set("hardware/followingTwin", following);
 
   root.set("hardware/deviceId", DEVICE_ID);
   root.set("hardware/firmware", FW_VERSION);
@@ -600,9 +670,11 @@ void publishSnapshot() {
   root.set("hardware/lastSeen/.sv", "timestamp");
 
   if (Firebase.RTDB.updateNode(&fbdoWrite, "/", &root)) {
-    if (hasLeak) leakFieldSet = true;
+    if (following) { /* system/ belongs to the twin */ }
+    else if (hasLeak) leakFieldSet = true;
     else if (leakFieldSet && Firebase.RTDB.deleteNode(&fbdoWrite, "system/leakSegments")) leakFieldSet = false;
-    if (hasStart) pumpStartFieldSet = true;
+    if (following) { /* system/ belongs to the twin */ }
+    else if (hasStart) pumpStartFieldSet = true;
     else if (pumpStartFieldSet && Firebase.RTDB.deleteNode(&fbdoWrite, "system/pumpStartedAt")) pumpStartFieldSet = false;
   } else Serial.println(fbdoWrite.errorReason());
   lastPublish = millis(); snapshotDue = false;
@@ -694,16 +766,22 @@ void loop() {
     calcFlows(dt);
     if (pumpOn) hwPumpOnSec++;
     readLevel();
-    updateLeak(now);
-    checkDryRun(now);
-    runPumpControl(now);
-    evaluateStatus();
+    updateFollowing(now);
+    if (following) runFollow();
+    else {
+      updateLeak(now);
+      checkDryRun(now);
+      runPumpControl(now);
+      evaluateStatus();
+    }
     updateIndicators();
     updateDisplay();
   }
   updateBuzzer();
 
   if (now - lastHwReport >= HW_REPORT_MS) { lastHwReport = now; hardwareReport(); }
+
+  if (streamsStarted && now - lastHilPoll >= HIL_POLL_MS) { lastHilPoll = now; pollHil(now); }
 
   if (streamsStarted && (lastConfigPoll == 0 || now - lastConfigPoll >= CONFIG_POLL_MS)) {
     lastConfigPoll = now ? now : 1;

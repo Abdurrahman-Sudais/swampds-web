@@ -141,7 +141,9 @@ export default function ControlPanel({ twin }) {
             </button>
             <button
               onClick={emptyDelivery}
-              className="px-3 py-2 min-h-[40px] text-xs rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+              disabled={sim.measuredDelivery !== null}
+              title={sim.measuredDelivery !== null ? 'The level comes from the real tank while hardware is linked' : undefined}
+              className="px-3 py-2 min-h-[40px] text-xs rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors disabled:opacity-40"
             >
               Empty Delivery
             </button>
