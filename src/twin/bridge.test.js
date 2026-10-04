@@ -374,19 +374,23 @@ test('hardware-in-the-loop: a silent ESP32 unlinks the level', async () => {
   assert.equal(tab.sim.measuredDelivery, null);
 });
 
-test('hardware-in-the-loop: disconnecting or closing the tab removes hil/, so the prototype stops following', async () => {
+test('hardware-in-the-loop: disconnecting or closing the tab stops the pump, but keeps hil/ for a seamless hand-over', async () => {
   const fake = createFakeDb();
   const tab = makeTab(fake, { clock: { t: 1000 } });
+  tab.sim = setManualCommand(setMode(tab.sim, 'manual'), 'on');
+  tab.advance(1);
   await tab.bridge.start();
-  assert.ok(fake.get('hil'));
+  assert.equal(fake.get('hil/pump'), true);
   await tab.bridge.stop();
-  assert.equal(fake.get('hil'), null);
+  assert.equal(fake.get('hil/pump'), false, 'pump off at once');
+  assert.equal(fake.get('hil/heartbeat'), 1000, 'heartbeat left to go stale, not deleted');
 
   const tab2 = makeTab(fake, { clientId: 'tab-B', clock: { t: 2000 } });
+  tab2.sim = tab.sim;
   await tab2.bridge.start();
-  assert.ok(fake.get('hil'));
+  assert.equal(fake.get('hil/pump'), true);
   tab2.connection.disconnect();                                    // browser closed without cleanup
-  assert.equal(fake.get('hil'), null);
+  assert.equal(fake.get('hil/pump'), false);
 });
 
 test('level-rate leak on the prototype: the twin latches it, and its Reset is passed back to the prototype', async () => {

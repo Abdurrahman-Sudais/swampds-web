@@ -108,9 +108,10 @@ export function createBridge(deps) {
 
       offlineHandler = onDisconnect(ref(db, 'system/online'));
       await offlineHandler.set(false);
-      // If this tab dies, the prototype stops mirroring at once instead of waiting out its timeout
-      hilHandler = onDisconnect(ref(db, 'hil'));
-      await hilHandler.remove();
+      // If this tab dies, the prototype's pump stops at once. hil/ itself stays: the prototype keeps
+      // following until the heartbeat goes stale, so a reload or a hand-over to another twin is seamless.
+      hilHandler = onDisconnect(ref(db, 'hil/pump'));
+      await hilHandler.set(false);
 
       unsubs = [
         onValue(ref(db, 'status/controlMode'), (snap) => {
@@ -170,7 +171,7 @@ export function createBridge(deps) {
     if (wasRunning) applyHardware({ levelPct: null, levelCheck: null }); // no longer receiving the prototype's readings
     if (wasRunning && release) {
       try {
-        await remove(ref(db, 'hil'));          // the prototype stops mirroring this twin
+        await update(root(), { 'hil/pump': false }); // pump off now; the prototype lets go once the heartbeat is stale
         await logConnection('disconnected', now());
         await runTransaction(lockRef, (current) => (current?.clientId === clientId ? null : undefined));
         await update(root(), { 'system/online': false });

@@ -13,7 +13,8 @@
  *   system/leakSegments  'A'   (absent when there is no leak; one segment, F1 -> F2)
  *   system/hardwareLinked  true while the delivery level comes from the prototype's sensor
  *   hil/status, hil/pump, hil/heartbeat   outputs for the prototype to mirror (hardware-in-the-loop):
- *     the ESP32 drives its LEDs, buzzer and pump relay from these while the heartbeat keeps changing
+ *     the ESP32 drives its LEDs, buzzer and pump relay from these while the heartbeat keeps changing.
+ *     On disconnect only hil/pump is cleared (pump off at once); the ESP32 lets go once the heartbeat is stale
  *   hil/reset          count of alarm resets; a change clears the prototype's latched level leak
  *   alerts/<pushId>    { time, severity, message, timestamp, source }
  *     - one is written when the twin connects to / disconnects from the dashboard
