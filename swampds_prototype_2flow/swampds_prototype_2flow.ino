@@ -20,9 +20,11 @@
   paused (the twin does the detection), and it stops publishing sensors/ and system/
   (the twin publishes those). It keeps reading the ultrasonic sensor and publishes
   hardware/levelCm, which the twin uses as its delivery-tank level. A local overflow
-  guard still has the last word on the pump. If the heartbeat stops changing for
-  HIL_TIMEOUT_MS (or hil/ is removed), the pump stops and the board goes back to
-  running on its own sensors.
+  guard still has the last word on the pump. It stops following only when the twin
+  has really gone: the heartbeat seen unchanged for HIL_TIMEOUT_MS by reads that
+  succeeded, hil/ removed, or no successful read at all for HIL_LOST_MS. Failed reads
+  on a slow network alone do not drop the link. The pump then stops and the board
+  goes back to running on its own sensors.
 
   Level-rate leak check (volume balance): while the pump runs, the delivery tank
   should rise at the normal fill rate (FILL_RATE_CM_PER_MIN, measured once with no
@@ -59,7 +61,7 @@
 #include "secrets.h"
 
 #define DEVICE_ID      "SWAMPDS-ESP32-01"
-#define FW_VERSION     "1.6-2flow-hil-level"
+#define FW_VERSION     "1.7-2flow-hil-level"
 #define TZ_OFFSET_SEC  3600                             // Nigeria (WAT, UTC+1)
 
 // ======================= Pins =======================
@@ -121,6 +123,7 @@ const uint32_t PUBLISH_MS = 2000;
 const uint32_t CONFIG_POLL_MS = 10000;                         // how often admin-set levels are re-read
 const uint32_t HIL_POLL_MS = 1000;                             // how often hil/ (the twin's outputs) is read
 const uint32_t HIL_TIMEOUT_MS = 15000;                         // twin heartbeat unchanged this long = stop following
+const uint32_t HIL_LOST_MS = 45000;                            // no successful read of hil/ this long = stop following
 const uint32_t WIFI_RETRY_MS = 30000;                          // restart a Wi-Fi attempt only after this long: phone
                                                                // hotspots can take over 10 s to let a device join
 
@@ -195,6 +198,7 @@ String hilStatus = "NORMAL", hilBeat = "", hilReset = "";
 bool hilResetKnown = false;
 bool hilPump = false;
 uint32_t hilBeatAt = 0, lastHilPoll = 0;   // hilBeatAt 0 = no live twin
+uint32_t hilOkAt = 0;                      // last successful read of hil/
 
 bool snapshotDue = false;
 uint32_t lastTick = 0, lastPublish = 0, lastWifiRetry = 0, lastWifiWaitMsg = 0;
@@ -473,7 +477,8 @@ void pollHil(uint32_t now) {
     Serial.printf("twin link read failed: %s\n", fbdoWrite.errorReason().c_str());
     return;
   }
-  if (fbdoWrite.dataType() != "json") { hilBeatAt = 0; return; }   // hil/ removed: the twin disconnected
+  hilOkAt = now ? now : 1;
+  if (fbdoWrite.dataType() != "json") { hilBeatAt = 0; return; }   // hil/ removed: no twin
   FirebaseJson *j = fbdoWrite.to<FirebaseJson *>();
   FirebaseJsonData st, pump, beat;
   j->get(st, "status"); j->get(pump, "pump"); j->get(beat, "heartbeat");
@@ -490,7 +495,12 @@ void pollHil(uint32_t now) {
 }
 
 void updateFollowing(uint32_t now) {
-  bool want = hilBeatAt != 0 && now - hilBeatAt < HIL_TIMEOUT_MS;
+  bool beatFresh = hilBeatAt != 0 && now - hilBeatAt < HIL_TIMEOUT_MS;
+  // Gone = heartbeat unchanged across reads that WORKED, or no read working at all for a long time.
+  bool gone = hilBeatAt == 0
+              || (!beatFresh && hilOkAt - hilBeatAt >= HIL_TIMEOUT_MS)
+              || now - hilOkAt >= HIL_LOST_MS;
+  bool want = following ? !gone : beatFresh;
   if (want == following) return;
   if (want) {
     following = true;
