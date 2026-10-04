@@ -10,6 +10,10 @@
  * declares a leak, which latches - the pump cuts off and the alarm stays on until the
  * operator resets it with the valve closed.
  *
+ * Hardware-in-the-loop: when the prototype's ultrasonic sensor is linked (setMeasuredLevel),
+ * the delivery tank level is the real measurement instead of a simulated one, and the source
+ * tank is not drained (the real pump draws from the real source).
+ *
  * Every function takes a state and returns a new one. Randomness is injected (`rng`)
  * so tests are deterministic.
  */
@@ -38,6 +42,7 @@ export function createInitialState() {
     stopReason: null,        // why a wanted pump is held off: 'leak' | 'source-empty' | 'delivery-full'
     valves: { A: 0 },        // leak valve opening, 0-100 %
     tanks: { source: 100, delivery: 5 },  // percent full; below lowLevelPct so auto mode starts the pump
+    measuredDelivery: null,  // real delivery level (%) from the hardware sensor, null = simulated
     flows: { f1: 0, f2: 0 },              // sensor readings, L/min
     leakFlow: { A: 0 },                   // true water being lost, L/min (for the schematic)
     segments: { A: emptySegment() },
@@ -128,14 +133,17 @@ function runPhysics(s, config, dt, rng) {
   };
 
   const perMin = dt / 60;
+  const measured = s.measuredDelivery;
   return {
     ...s,
     flows: { f1: read(trueF1, 0), f2: read(trueF2, 1) },
     leakFlow: { A: leakA },
-    tanks: {
-      source:   clamp(s.tanks.source   - (trueF1 * perMin / config.sourceCapacityL)   * 100, 0, 100),
-      delivery: clamp(s.tanks.delivery + (trueF2 * perMin / config.deliveryCapacityL) * 100, 0, 100),
-    },
+    tanks: measured === null
+      ? {
+          source:   clamp(s.tanks.source   - (trueF1 * perMin / config.sourceCapacityL)   * 100, 0, 100),
+          delivery: clamp(s.tanks.delivery + (trueF2 * perMin / config.deliveryCapacityL) * 100, 0, 100),
+        }
+      : { source: s.tanks.source, delivery: measured },
   };
 }
 
@@ -249,6 +257,24 @@ export function acknowledgeReset(state) {
     segments: { A: emptySegment() },
   };
   return { state: addEvent(next, 'info', 'operator', 'Operator acknowledged the alarm and reset the system.'), ok: true };
+}
+
+/**
+ * Link (percent, 0-100) or unlink (null) the real delivery-tank level from the hardware sensor.
+ * While linked, the tank shows the measurement; unlinked, the simulation carries on from it.
+ */
+export function setMeasuredLevel(state, percent) {
+  const value = Number.isFinite(percent) ? clamp(percent, 0, 100) : null;
+  if (value === state.measuredDelivery) return state;
+  const wasLinked = state.measuredDelivery !== null;
+  const next = {
+    ...state,
+    measuredDelivery: value,
+    tanks: value === null ? state.tanks : { ...state.tanks, delivery: value },
+  };
+  if (!wasLinked && value !== null) return addEvent(next, 'info', 'system', 'Hardware linked: delivery tank level now comes from the ultrasonic sensor.');
+  if (wasLinked && value === null) return addEvent(next, 'warning', 'system', 'Hardware level sensor lost: delivery tank level is simulated until it returns.');
+  return next;
 }
 
 /** Refill the source tank to 100 % so the demo can be run again. */

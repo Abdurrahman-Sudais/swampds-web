@@ -49,7 +49,7 @@ const initialData = {
   loaded:  false, // true once the first real Firebase snapshot has arrived
   // Where the data comes from. `receivedAt` is the LOCAL time the heartbeat (sensors/lastUpdated)
   // last changed, so staleness does not depend on the publisher's clock being right.
-  meta:    { source: null, online: null, lastUpdated: null, receivedAt: null },
+  meta:    { source: null, online: null, hardwareLinked: false, lastUpdated: null, receivedAt: null },
 };
 
 let _store = { ...initialData };
@@ -96,6 +96,7 @@ function _rebuild() {
   const meta = {
     source:      backendSystem.source ?? null,
     online:      backendSystem.online ?? null,
+    hardwareLinked: backendSystem.hardwareLinked === true,
     lastUpdated: beat,
     receivedAt:  beat === null
       ? null

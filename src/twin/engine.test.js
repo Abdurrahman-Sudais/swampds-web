@@ -5,7 +5,7 @@ import { DEFAULT_CONFIG, reliableLeakOpening } from './config.js';
 import { DEMO_PRESETS } from './presets.js';
 import {
   createInitialState, step, setValve, setMode, setManualCommand,
-  acknowledgeReset, refillSource, emptyDelivery,
+  acknowledgeReset, refillSource, emptyDelivery, setMeasuredLevel,
 } from './engine.js';
 import { deriveOutputs } from './outputs.js';
 
@@ -249,4 +249,34 @@ test('every leak preset opens a valve far enough to be detected with default set
       `${preset.id} opens only ${JSON.stringify(opened)}`,
     );
   }
+});
+
+test('a linked hardware level replaces the simulated delivery tank, and the simulation resumes from it when unlinked', () => {
+  let s = setMeasuredLevel(createInitialState(), 40);
+  assert.equal(s.tanks.delivery, 40);
+  assert.match(s.events[0].message, /Hardware linked/);
+
+  s = setMode(s, 'manual');
+  s = setManualCommand(s, 'on');
+  const source = s.tanks.source;
+  for (let i = 0; i < 20; i++) s = step(s, DEFAULT_CONFIG, DEFAULT_CONFIG.tickSec, () => 0.5);
+  assert.equal(s.pumpOn, true);
+  assert.ok(s.flows.f1 > 0, 'flows are still modelled');
+  assert.equal(s.tanks.delivery, 40, 'level follows the measurement, not the model');
+  assert.equal(s.tanks.source, source, 'the real pump draws from the real source, so the model does not drain it');
+
+  assert.equal(setMeasuredLevel(s, 40), s, 'an unchanged reading is a no-op');
+
+  s = setMeasuredLevel(s, null);
+  assert.match(s.events[0].message, /level sensor lost/);
+  s = step(s, DEFAULT_CONFIG, DEFAULT_CONFIG.tickSec, () => 0.5);
+  assert.ok(s.tanks.delivery > 40, 'simulation carries on from the last real level');
+});
+
+test('the twin cuts the pump on a leak even while the level is measured', () => {
+  let s = setMeasuredLevel(createInitialState(), 5);   // below the auto ON level
+  s = setValve(s, 'A', 100);
+  for (let i = 0; i < 40; i++) s = step(s, DEFAULT_CONFIG, DEFAULT_CONFIG.tickSec, () => 0.5);
+  assert.equal(s.status, 'leak');
+  assert.equal(s.pumpOn, false);
 });

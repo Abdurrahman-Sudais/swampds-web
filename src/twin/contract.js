@@ -11,6 +11,9 @@
  *   system/source      'digital-twin'      (so the dashboard can say the data is simulated)
  *   system/online      true
  *   system/leakSegments  'A'   (absent when there is no leak; one segment, F1 -> F2)
+ *   system/hardwareLinked  true while the delivery level comes from the prototype's sensor
+ *   hil/status, hil/pump, hil/heartbeat   outputs for the prototype to mirror (hardware-in-the-loop):
+ *     the ESP32 drives its LEDs, buzzer and pump relay from these while the heartbeat keeps changing
  *   alerts/<pushId>    { time, severity, message, timestamp, source }
  *     - one is written when the twin connects to / disconnects from the dashboard
  *   pumpHistory/<pushId>  { date, start, end, duration, startTimestamp }
@@ -21,6 +24,9 @@
  *   status/controlMode  'auto' | 'manual'
  *   control/pumpCommand 'on' | 'off'   (only in manual mode)
  *   config/pumpOnCm, config/pumpOffCm   admin-set auto-pump levels (cm); defaults when absent or unsafe
+ *
+ * WHAT THE TWIN READS FROM THE PROTOTYPE (written by the ESP32):
+ *   hardware/levelCm, hardware/levelFault, hardware/lastSeen   the real delivery-tank level
  */
 
 import { PUMP_ON_CM, PUMP_OFF_CM, validatePumpThresholds, levelPct } from './config.js';
@@ -29,6 +35,7 @@ export const DATA_SOURCE = 'digital-twin';
 export const PUBLISH_INTERVAL_MS = 1000;
 export const LOCK_TTL_MS = 15_000;      // a lock whose heartbeat is older than this is up for grabs
 export const STALE_AFTER_MS = 15_000;   // dashboard: no heartbeat change for this long = offline
+export const HARDWARE_STALE_MS = 10_000; // twin: no hardware/lastSeen change for this long = level sensor unlinked
 
 const STATUS_TEXT = { normal: 'NORMAL', warning: 'WARNING', leak: 'LEAK' };
 
@@ -59,6 +66,12 @@ export function toSnapshot(sim, config, now, pumpStartedAt = null) {
       online: true,
       leakSegments: sim.leakSegments.length > 0 ? sim.leakSegments.join(',') : null, // null deletes it
       pumpStartedAt: sim.pumpOn ? pumpStartedAt : null, // null deletes it - no stale value once the pump stops
+      hardwareLinked: sim.measuredDelivery !== null,
+    },
+    hil: {
+      status: STATUS_TEXT[sim.status] ?? 'NORMAL',
+      pump: sim.pumpOn,
+      heartbeat: now,
     },
     twin: {
       valves: { A: sim.valves.A },
@@ -185,6 +198,18 @@ export function pumpLevelsFromDb(config) {
   };
 }
 
+// Hardware-in-the-loop
+
+/**
+ * hardware/ node (written by the ESP32) -> real delivery level in %, or null when there is no
+ * usable reading (no hardware, sensor fault, or the ESP32 has not published one yet).
+ */
+export function measuredLevelPct(hardware, config) {
+  const cm = hardware?.levelCm;
+  if (!Number.isFinite(cm) || hardware.levelFault === true) return null;
+  return Math.min(100, Math.max(0, (cm / config.deliveryHeightCm) * 100));
+}
+
 // Single-publisher lock
 
 /** May this client take the lock? Free, already ours, stale, or forced. */
@@ -201,7 +226,8 @@ export function canAcquireLock(current, { now, clientId, force = false }) {
  * Should the operator dashboard warn about where its data comes from?
  * `receivedAt` is the LOCAL time the heartbeat last changed, so it does not depend on the
  * two machines' clocks agreeing.
- * @returns {{ kind: 'live'|'simulated'|'offline', simulated: boolean, ageSec: number|null }}
+ * @returns {{ kind: 'live'|'simulated'|'hybrid'|'offline', simulated: boolean, ageSec: number|null }}
+ *   hybrid: the twin is publishing, with the prototype's level sensor and outputs linked
  */
 export function describeDataSource(meta, now) {
   const simulated = meta?.source === DATA_SOURCE;
@@ -209,6 +235,6 @@ export function describeDataSource(meta, now) {
   const offline = meta?.online === false || (age !== null && age > STALE_AFTER_MS);
   const ageSec = age === null ? null : Math.round(age / 1000);
   if (offline) return { kind: 'offline', simulated, ageSec };
-  if (simulated) return { kind: 'simulated', simulated, ageSec };
+  if (simulated) return { kind: meta?.hardwareLinked ? 'hybrid' : 'simulated', simulated, ageSec };
   return { kind: 'live', simulated, ageSec };
 }

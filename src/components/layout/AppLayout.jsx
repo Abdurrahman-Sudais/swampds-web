@@ -17,6 +17,7 @@ import { useSwampdsData } from '../../data/swampdsData';
 import { useAuth } from '../../auth/AuthContext';
 import { useUnreadAlerts } from './useUnreadAlerts';
 import { PageSkeleton } from '../skeleton/Skeleton';
+import BackgroundTwin from '../../twin/BackgroundTwin';
 
 // How long to hold the skeleton for the first Firebase snapshot before showing the page anyway
 // (with its empty values and the offline banner) rather than leaving it loading forever.
@@ -50,7 +51,7 @@ const ROUTE_TITLES = {
 export default function AppLayout() {
   const { pathname } = useLocation();
   const { alerts, status, loaded, meta } = useSwampdsData();
-  const { user } = useAuth();
+  const { user, canEdit } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { unreadCount, markSeen } = useUnreadAlerts(alerts, user?.uid);
 
@@ -153,6 +154,8 @@ export default function AppLayout() {
 
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden font-sans">
+      {/* Admins only: the database rules let only admins publish as the twin */}
+      {canEdit && <BackgroundTwin />}
       <Sidebar
         navItems={NAV_ITEMS}
         isOpen={sidebarOpen}

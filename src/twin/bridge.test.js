@@ -2,10 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { DEFAULT_CONFIG as CFG, FULL_SCALE_CM, PUMP_ON_CM, PUMP_OFF_CM } from './config.js';
-import { createInitialState, step, setValve, setMode, setManualCommand } from './engine.js';
+import { createInitialState, step, setValve, setMode, setManualCommand, setMeasuredLevel } from './engine.js';
 import { createBridge } from './bridge.js';
 import { createFakeDb } from './fakeDb.js';
-import { LOCK_TTL_MS, DATA_SOURCE } from './contract.js';
+import { LOCK_TTL_MS, DATA_SOURCE, HARDWARE_STALE_MS } from './contract.js';
 
 /** One simulated browser tab running a twin + bridge against a shared fake database. */
 function makeTab(fake, { clientId = 'tab-A', email = 'a@team.test', clock } = {}) {
@@ -16,6 +16,7 @@ function makeTab(fake, { clientId = 'tab-A', email = 'a@team.test', clock } = {}
     statuses: [],
     intents: [],
     configs: [],
+    levels: [],
     interval: null,
     advance(ticks = 1) { for (let i = 0; i < ticks; i++) tab.sim = step(tab.sim, CFG, CFG.tickSec, () => 0.5); },
   };
@@ -30,6 +31,7 @@ function makeTab(fake, { clientId = 'tab-A', email = 'a@team.test', clock } = {}
         : setManualCommand(tab.sim, intent.value, 'dashboard');
     },
     applyConfig: (patch) => { tab.configs.push(patch); },
+    applyMeasuredLevel: (pct) => { tab.levels.push(pct); tab.sim = setMeasuredLevel(tab.sim, pct); },
     onStatus: (s) => tab.statuses.push(s),
     now: () => clock.t,
     setIntervalFn: (fn) => { tab.interval = fn; return 1; },
@@ -338,4 +340,48 @@ test('admin-set pump levels reach the twin: on connect, on change, and unsafe va
 
   fake.write('config', { pumpOnCm: 2, pumpOffCm: 17 });             // above the safe level
   assert.deepEqual(tab.configs.at(-1), { lowLevelPct: pct(PUMP_ON_CM), fullLevelPct: pct(PUMP_OFF_CM) });
+});
+
+test('hardware-in-the-loop: the ESP32 level feeds the twin, and the twin publishes outputs for it to mirror', async () => {
+  const fake = createFakeDb({ hardware: { levelCm: 7, levelFault: false, lastSeen: 1 } });
+  const clock = { t: 10_000 };
+  const tab = makeTab(fake, { clock });
+  await tab.bridge.start();
+
+  assert.equal(tab.sim.tanks.delivery, 50, 'real level applied on connect');
+  clock.t += 1000; await tab.interval();
+  assert.equal(fake.get('system/hardwareLinked'), true);
+  assert.deepEqual(fake.get('hil'), { status: 'NORMAL', pump: false, heartbeat: 11_000 });
+
+  fake.write('hardware', { levelCm: 3.5, levelFault: false, lastSeen: 2 });
+  assert.equal(tab.sim.tanks.delivery, 25, 'new readings apply as they arrive');
+
+  fake.write('hardware', { levelCm: 3.5, levelFault: true, lastSeen: 3 });
+  assert.equal(tab.sim.measuredDelivery, null, 'a sensor fault unlinks the level');
+});
+
+test('hardware-in-the-loop: a silent ESP32 unlinks the level', async () => {
+  const fake = createFakeDb({ hardware: { levelCm: 7, lastSeen: 1 } });
+  const clock = { t: 10_000 };
+  const tab = makeTab(fake, { clock });
+  await tab.bridge.start();
+  assert.notEqual(tab.sim.measuredDelivery, null);
+
+  clock.t += HARDWARE_STALE_MS + 1000; await tab.interval();      // lastSeen never changed
+  assert.equal(tab.sim.measuredDelivery, null);
+});
+
+test('hardware-in-the-loop: disconnecting or closing the tab removes hil/, so the prototype stops following', async () => {
+  const fake = createFakeDb();
+  const tab = makeTab(fake, { clock: { t: 1000 } });
+  await tab.bridge.start();
+  assert.ok(fake.get('hil'));
+  await tab.bridge.stop();
+  assert.equal(fake.get('hil'), null);
+
+  const tab2 = makeTab(fake, { clientId: 'tab-B', clock: { t: 2000 } });
+  await tab2.bridge.start();
+  assert.ok(fake.get('hil'));
+  tab2.connection.disconnect();                                    // browser closed without cleanup
+  assert.equal(fake.get('hil'), null);
 });

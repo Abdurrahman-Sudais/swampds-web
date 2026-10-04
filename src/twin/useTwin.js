@@ -51,6 +51,7 @@ export function useTwin() {
   const setManualCommand = useCallback((cmd, origin) => setSim((s) => engine.setManualCommand(s, cmd, origin)), []);
   const refillSource     = useCallback(() => setSim((s) => engine.refillSource(s)), []);
   const emptyDelivery    = useCallback(() => setSim((s) => engine.emptyDelivery(s)), []);
+  const setMeasuredLevel = useCallback((pct) => setSim((s) => engine.setMeasuredLevel(s, pct)), []);
 
   const acknowledgeReset = useCallback(() => {
     const result = engine.acknowledgeReset(simRef.current);
@@ -72,6 +73,6 @@ export function useTwin() {
   return {
     sim, config, startedAt, notice,
     setValve, setMode, setManualCommand, acknowledgeReset,
-    refillSource, emptyDelivery, updateConfig, resetConfig, restart,
+    refillSource, emptyDelivery, setMeasuredLevel, updateConfig, resetConfig, restart,
   };
 }
