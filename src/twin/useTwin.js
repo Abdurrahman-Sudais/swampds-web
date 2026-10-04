@@ -9,9 +9,10 @@ const MAX_CATCH_UP_TICKS = 100; // after a long stall (laptop asleep), don't rep
 /**
  * Runs the digital-twin engine on a fixed interval and exposes its operator actions.
  * Config changes (tolerance, persistence, ...) apply from the next tick.
+ * @param {{ initialMode?: 'auto'|'manual' }} [options]  mode at start and after restart
  */
-export function useTwin() {
-  const [sim, setSim]             = useState(() => engine.createInitialState());
+export function useTwin({ initialMode = 'auto' } = {}) {
+  const [sim, setSim]             = useState(() => engine.createInitialState({ mode: initialMode }));
   const [config, setConfig]       = useState(DEFAULT_CONFIG);
   const [startedAt, setStartedAt] = useState(() => Date.now());
   const [notice, setNotice]       = useState(null); // feedback for the last reset attempt
@@ -51,7 +52,8 @@ export function useTwin() {
   const setManualCommand = useCallback((cmd, origin) => setSim((s) => engine.setManualCommand(s, cmd, origin)), []);
   const refillSource     = useCallback(() => setSim((s) => engine.refillSource(s)), []);
   const emptyDelivery    = useCallback(() => setSim((s) => engine.emptyDelivery(s)), []);
-  const setMeasuredLevel = useCallback((pct) => setSim((s) => engine.setMeasuredLevel(s, pct)), []);
+  const setHardware      = useCallback(({ levelPct, levelCheck }) =>
+    setSim((s) => engine.setLevelCheck(engine.setMeasuredLevel(s, levelPct), levelCheck)), []);
 
   const acknowledgeReset = useCallback(() => {
     const result = engine.acknowledgeReset(simRef.current);
@@ -65,14 +67,14 @@ export function useTwin() {
   const resetConfig   = useCallback(() => setConfig(DEFAULT_CONFIG), []);
 
   const restart = useCallback(() => {
-    setSim(engine.createInitialState());
+    setSim(engine.createInitialState({ mode: initialMode }));
     setStartedAt(Date.now());
     setNotice(null);
-  }, []);
+  }, [initialMode]);
 
   return {
     sim, config, startedAt, notice,
     setValve, setMode, setManualCommand, acknowledgeReset,
-    refillSource, emptyDelivery, setMeasuredLevel, updateConfig, resetConfig, restart,
+    refillSource, emptyDelivery, setHardware, updateConfig, resetConfig, restart,
   };
 }

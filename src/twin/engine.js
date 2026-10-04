@@ -12,7 +12,8 @@
  *
  * Hardware-in-the-loop: when the prototype's ultrasonic sensor is linked (setMeasuredLevel),
  * the delivery tank level is the real measurement instead of a simulated one, and the source
- * tank is not drained (the real pump draws from the real source).
+ * tank is not drained (the real pump draws from the real source). The prototype's own
+ * level-rate leak check (setLevelCheck) latches a leak here too, as segment 'L'.
  *
  * Every function takes a state and returns a new one. Randomness is injected (`rng`)
  * so tests are deterministic.
@@ -30,12 +31,15 @@ const round2 = (v) => Math.round(v * 100) / 100;
 
 const emptySegment = () => ({ diffPct: 0, abnormalFor: 0, leak: false });
 
-/** @returns the simulation state at power-on (pump idle, delivery tank low so auto mode starts it). */
-export function createInitialState() {
+/**
+ * @returns the simulation state at power-on (pump idle, delivery tank low so auto mode starts it).
+ * @param {{ mode?: 'auto'|'manual' }} [options]  'manual' starts with the pump off until an operator acts
+ */
+export function createInitialState({ mode = 'auto' } = {}) {
   return addEvent({
     t: 0,
     seq: 0,
-    mode: 'auto',            // 'auto' | 'manual'
+    mode,                    // 'auto' | 'manual'
     manualCommand: 'off',    // 'on' | 'off' (used in manual mode)
     autoRun: false,          // auto-mode hysteresis memory
     pumpOn: false,           // relay closed and pump powered
@@ -43,12 +47,14 @@ export function createInitialState() {
     valves: { A: 0 },        // leak valve opening, 0-100 %
     tanks: { source: 100, delivery: 5 },  // percent full; below lowLevelPct so auto mode starts the pump
     measuredDelivery: null,  // real delivery level (%) from the hardware sensor, null = simulated
+    levelCheck: null,        // the prototype's level-rate leak check, as it reports it (null = not linked)
+    resets: 0,               // successful alarm resets; the prototype clears its own latch when this changes
     flows: { f1: 0, f2: 0 },              // sensor readings, L/min
     leakFlow: { A: 0 },                   // true water being lost, L/min (for the schematic)
     segments: { A: emptySegment() },
     status: 'normal',        // 'normal' | 'warning' | 'leak'
     latched: false,          // a leak was confirmed and not yet reset
-    leakSegments: [],        // ['A'] while a leak is latched
+    leakSegments: [],        // 'A' (flow F1 -> F2) and/or 'L' (level-rate check) while a leak is latched
     history: [],
     events: [],
   }, 'info', 'system', 'Digital twin started.');
@@ -255,6 +261,7 @@ export function acknowledgeReset(state) {
     status: 'normal',
     stopReason: null,
     segments: { A: emptySegment() },
+    resets: state.resets + 1,
   };
   return { state: addEvent(next, 'info', 'operator', 'Operator acknowledged the alarm and reset the system.'), ok: true };
 }
@@ -275,6 +282,32 @@ export function setMeasuredLevel(state, percent) {
   if (!wasLinked && value !== null) return addEvent(next, 'info', 'system', 'Hardware linked: delivery tank level now comes from the ultrasonic sensor.');
   if (wasLinked && value === null) return addEvent(next, 'warning', 'system', 'Hardware level sensor lost: delivery tank level is simulated until it returns.');
   return next;
+}
+
+/**
+ * The prototype's level-rate check, as published (hardware/levelCheck), or null when unlinked.
+ * A leak it newly reports latches the twin's alarm and cuts the pump, like a flow leak. Only the
+ * change to "leak" counts, so a reset is not undone while the prototype catches up with it.
+ */
+export function setLevelCheck(state, check) {
+  const wasLeak = state.levelCheck?.leak === true;
+  let next = { ...state, levelCheck: check };
+  if (!check?.leak || wasLeak) return next;
+  if (next.leakSegments.includes('L')) return next;
+
+  next = {
+    ...next,
+    latched: true,
+    leakSegments: [...next.leakSegments, 'L'],
+    status: 'leak',
+    pumpOn: false,
+    stopReason: 'leak',
+  };
+  const detail = Number.isFinite(check.risePct)
+    ? `the tank rose only ${check.risePct}% of its normal rate for ${check.abnormalSec} s`
+    : 'the tank stopped rising at its normal rate';
+  return addEvent(next, 'critical', 'system',
+    `LEAK CONFIRMED by the level-rate check: with the pump on, ${detail}. Water is being lost between the pump and the tank. Pump cut off, alarm on.`);
 }
 
 /** Refill the source tank to 100 % so the demo can be run again. */

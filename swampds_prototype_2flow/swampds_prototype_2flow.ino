@@ -24,6 +24,14 @@
   HIL_TIMEOUT_MS (or hil/ is removed), the pump stops and the board goes back to
   running on its own sensors.
 
+  Level-rate leak check (volume balance): while the pump runs, the delivery tank
+  should rise at the normal fill rate (FILL_RATE_CM_PER_MIN, measured once with no
+  leak: the hardware check prints the rate it sees). Rising slower than
+  LEVEL_LEAK_RATIO of that for LEVEL_PERSIST_SEC means water is being lost between
+  the pump and the tank: leak alarm, pump cut. It runs in both modes and latches
+  like the flow check; it clears on a mode switch or the twin's Reset (hil/reset).
+  It cannot say WHERE the leak is, and only works while the pump is running.
+
   Credentials live in secrets.h (git-ignored). Copy secrets.example.h to
   secrets.h in this folder and fill it in before compiling.
 
@@ -50,7 +58,7 @@
 #include "secrets.h"
 
 #define DEVICE_ID      "SWAMPDS-ESP32-01"
-#define FW_VERSION     "1.4-2flow-hil"
+#define FW_VERSION     "1.5-2flow-hil-level"
 #define TZ_OFFSET_SEC  3600                             // Nigeria (WAT, UTC+1)
 
 // ======================= Pins =======================
@@ -91,6 +99,20 @@ const uint32_t DRY_RUN_SEC       = 15;
 const float DRY_RUN_MIN_FLOW     = 0.3;
 const uint32_t DRY_RUN_HOLD_MS   = 60000;
 const uint8_t SENSOR_FAULT_AFTER = 5;
+
+// Flow sensors: false while they are out of service. Turns off the flow-difference leak check and the
+// dry-run stop, which would otherwise false-alarm on sensors that read 0. The level-rate check covers leaks.
+const bool FLOW_SENSORS_FITTED   = false;
+
+// Level-rate leak check. FILL_RATE_CM_PER_MIN must be MEASURED: run the pump with no leak and read
+// "Level check" in the Serial Monitor hardware report (or time a fill: cm risen / minutes).
+const float FILL_RATE_CM_PER_MIN = 6.0;          // normal rise of the delivery tank with the pump on
+const float LEVEL_LEAK_RATIO     = 0.6;          // rising slower than 60 % of normal = water lost on the way
+const uint32_t LEVEL_SETTLE_SEC  = 8;            // after the pump starts: pipe fills before the tank starts rising
+const uint32_t LEVEL_PERSIST_SEC = 6;            // slow rise must last this long to be a leak
+const float LEVEL_MIN_RISE_CM    = 1.5;          // compare over a window long enough to expect at least this rise,
+                                                 // or the HC-SR04's few-mm noise swamps it
+const uint8_t LEVEL_WINDOW_MAX   = 60;           // longest window, seconds (1 sample per second)
 const float SOUND_CM_PER_US      = 0.0347;       // speed of sound at ~27 °C (Nigeria); 0.0343 is for 20 °C
 
 const uint32_t PUBLISH_MS = 2000;
@@ -134,7 +156,7 @@ uint32_t lastConfigPoll = 0;
 bool pumpOn = false;
 uint32_t pumpOnSince = 0;
 int64_t pumpStartedMs = 0;
-bool modeAuto = true;
+bool modeAuto = false;            // manual (pump off) until status/controlMode says otherwise: never pump on boot
 String manualCommand = "off";
 uint32_t dryRunHoldUntil = 0;
 bool dryRunHoldActive = false;   // separate flag so the millis() rollover can't fake a hold
@@ -142,6 +164,14 @@ bool dryRunHoldActive = false;   // separate flag so the millis() rollover can't
 bool leakA = false;               // single segment now. LATCHED on purpose: it stays true (pump blocked in both
                                   // modes) until the operator switches mode, so someone must inspect the pipe.
 uint32_t overSinceA = 0;
+
+bool levelLeak = false;           // level-rate check, LATCHED like leakA
+float levelHist[LEVEL_WINDOW_MAX];
+uint8_t levelHead = 0, levelSamples = 0;
+uint32_t levelAbnormalSec = 0;
+float levelRiseCm = 0, levelExpectedCm = 0;
+int levelRisePct = -1;            // rise over the window as % of normal; -1 = not measuring
+const char *levelState = "idle";  // idle | settling | watching | leak (published for the twin)
 
 Status status = S_NORMAL, prevStatus = S_NORMAL;
 String prevLeakStr = "";
@@ -159,7 +189,8 @@ bool modeKnown = false, cmdKnown = false, streamsStarted = false, bootAnnounced 
 // Twin link (hardware-in-the-loop). The heartbeat is compared as text: only a change matters,
 // so the twin's clock never has to agree with this one.
 bool following = false;
-String hilStatus = "NORMAL", hilBeat = "";
+String hilStatus = "NORMAL", hilBeat = "", hilReset = "";
+bool hilResetKnown = false;
 bool hilPump = false;
 uint32_t hilBeatAt = 0, lastHilPoll = 0;   // hilBeatAt 0 = no live twin
 
@@ -303,10 +334,51 @@ void updateLeak(uint32_t now) {
   } else overSinceA = 0;
 }
 
-String leakString() { return leakA ? "A" : ""; }   // "B" and "A,B" no longer possible
+bool anyLeak() { return leakA || levelLeak; }
+
+// "A" = flow sensors F1 -> F2, "L" = level-rate check (pump -> tank, no location)
+String leakString() { return leakA && levelLeak ? "A,L" : leakA ? "A" : levelLeak ? "L" : ""; }
+
+void clearLeaks() { leakA = false; overSinceA = 0; levelLeak = false; levelAbnormalSec = 0; levelSamples = 0; snapshotDue = true; }
+
+uint8_t levelWindowSec() {
+  return (uint8_t)constrain((int)ceilf(LEVEL_MIN_RISE_CM / FILL_RATE_CM_PER_MIN * 60.0f), 10, (int)LEVEL_WINDOW_MAX - 1);
+}
+
+// Volume balance: with the pump on, the tank must keep rising at close to the normal rate.
+void checkLevelRate(uint32_t now) {
+  bool measurable = pumpOn && levelKnown && !sensorFault
+                    && now - pumpOnSince >= LEVEL_SETTLE_SEC * 1000UL
+                    && levelCm < pumpOffCm - 0.5f;     // near the top the rise stops for normal reasons
+  if (!measurable) {
+    levelSamples = 0; levelAbnormalSec = 0; levelRisePct = -1;
+    levelState = levelLeak ? "leak" : (pumpOn && levelKnown && !sensorFault && levelCm < pumpOffCm - 0.5f) ? "settling" : "idle";
+    return;
+  }
+  levelHist[levelHead] = levelCm;
+  levelHead = (levelHead + 1) % LEVEL_WINDOW_MAX;
+  if (levelSamples < LEVEL_WINDOW_MAX) levelSamples++;
+
+  uint8_t w = levelWindowSec();
+  if (levelSamples <= w) { levelState = levelLeak ? "leak" : "watching"; levelRisePct = -1; return; }   // window not full yet
+  float then = levelHist[(levelHead + LEVEL_WINDOW_MAX - 1 - w) % LEVEL_WINDOW_MAX];
+  levelRiseCm = levelCm - then;
+  levelExpectedCm = FILL_RATE_CM_PER_MIN * w / 60.0f;
+  levelRisePct = (int)roundf(levelRiseCm / levelExpectedCm * 100.0f);
+
+  if (levelRiseCm < LEVEL_LEAK_RATIO * levelExpectedCm) {
+    if (++levelAbnormalSec >= LEVEL_PERSIST_SEC && !levelLeak) {
+      levelLeak = true;
+      snapshotDue = true;
+      Serial.printf("LEVEL LEAK: rose %.1f cm in %u s, normal is %.1f cm\n", levelRiseCm, w, levelExpectedCm);
+    }
+  } else levelAbnormalSec = 0;
+  levelState = levelLeak ? "leak" : "watching";
+}
 
 // ======================= Control =======================
 void checkDryRun(uint32_t now) {
+  if (!FLOW_SENSORS_FITTED) return;               // no working flow sensor to judge "no flow" by
   if (pumpOn && now - pumpOnSince > DRY_RUN_SEC * 1000UL && flow[0] < DRY_RUN_MIN_FLOW) {
     setPump(false);
     manualCommand = "off";
@@ -319,10 +391,10 @@ void checkDryRun(uint32_t now) {
 
 void runPumpControl(uint32_t now) {
   if (modeAuto) {
-    bool blocked = !levelKnown || sensorFault || leakA || holdActive(now);
+    bool blocked = !levelKnown || sensorFault || anyLeak() || holdActive(now);
     if (pumpOn && (levelCm >= pumpOffCm || blocked)) setPump(false);
     else if (!pumpOn && !blocked && levelCm <= pumpOnCm) setPump(true);
-  } else if (leakA) {
+  } else if (anyLeak()) {
     // Leak protection overrides manual mode (same as the twin). Drop the command too, so the
     // pump does not restart by itself once the leak is cleared by switching modes.
     setPump(false);
@@ -369,7 +441,7 @@ void handleStreamEvents() {
       if (!modeKnown) { modeKnown = true; modeAuto = wantAuto; }
       else if (wantAuto != modeAuto) {
         modeAuto = wantAuto;
-        leakA = false; overSinceA = 0;
+        clearLeaks();
         manualCommand = pumpOn ? "on" : "off";
         if (!modeAuto) writePumpCommand(manualCommand.c_str());
         snapshotDue = true;
@@ -403,6 +475,12 @@ void pollHil(uint32_t now) {
   if (!st.success || !pump.success || !beat.success) return;
   hilStatus = st.stringValue;
   hilPump = pump.boolValue;
+  FirebaseJsonData rs;
+  j->get(rs, "reset");                                   // the twin's Reset count: a change = operator reset
+  if (rs.success) {
+    if (hilResetKnown && rs.stringValue != hilReset) { clearLeaks(); Serial.println("Leak alarm reset from the Digital Twin"); }
+    hilReset = rs.stringValue; hilResetKnown = true;
+  }
   if (beat.stringValue != hilBeat) { hilBeat = beat.stringValue; hilBeatAt = now ? now : 1; }
 }
 
@@ -411,7 +489,8 @@ void updateFollowing(uint32_t now) {
   if (want == following) return;
   if (want) {
     following = true;
-    leakA = false; overSinceA = 0; dryRunHoldActive = false;   // the twin does the detection now
+    leakA = false; overSinceA = 0; dryRunHoldActive = false;   // the twin does the flow detection now;
+                                                                // a level leak stays latched and is reported to it
     Serial.println(">>> Following the Digital Twin: LEDs, buzzer and pump mirror it");
   } else {
     setPump(false);                                     // while still following, so the run is not logged twice
@@ -426,9 +505,10 @@ void updateFollowing(uint32_t now) {
 }
 
 void runFollow() {
-  status = hilStatus == "LEAK" ? S_LEAK : hilStatus == "WARNING" ? S_WARNING : S_NORMAL;
-  // The twin decides, but the real tank has the last word: never pump into a full tank or blind.
-  bool safe = levelKnown && !sensorFault && levelCm < DELIVERY_HEIGHT_CM;
+  status = levelLeak || hilStatus == "LEAK" ? S_LEAK : hilStatus == "WARNING" ? S_WARNING : S_NORMAL;
+  // The twin decides, but the real tank has the last word: never pump into a full tank, blind,
+  // or while this board's own level check has found water going missing.
+  bool safe = levelKnown && !sensorFault && levelCm < DELIVERY_HEIGHT_CM && !levelLeak;
   setPump(hilPump && safe);
   prevStatus = status; prevLeakStr = ""; prevWarnReason = "";
 }
@@ -474,11 +554,16 @@ void evaluateStatus() {
   else if (holdActive(millis())) warn = "Pump stopped after running without flow.";
   else if (levelKnown && levelCm < LOW_LEVEL_WARN_CM) warn = "Water level is low (" + String(levelCm, 1) + " cm).";
 
-  status = leakA ? S_LEAK : (warn.length() ? S_WARNING : S_NORMAL);
+  status = anyLeak() ? S_LEAK : (warn.length() ? S_WARNING : S_NORMAL);
 
   String ls = leakString();
-  if (status == S_LEAK && ls != prevLeakStr)
-    pushAlert("critical", "Leak detected between the flow sensors. Flow is dropping from flow1 to flow2 — note that anything downstream of flow2 is not monitored.");
+  if (status == S_LEAK && ls != prevLeakStr) {
+    if (levelLeak && prevLeakStr.indexOf('L') < 0)
+      pushAlert("critical", "Leak detected by the level-rate check: with the pump on, the tank rose " + String(levelRiseCm, 1) +
+                " cm in " + levelWindowSec() + " s, normally " + String(levelExpectedCm, 1) + " cm. Water is being lost between the pump and the tank. Pump cut off.");
+    if (leakA && prevLeakStr.indexOf('A') < 0)
+      pushAlert("critical", "Leak detected between the flow sensors. Flow is dropping from flow1 to flow2 — note that anything downstream of flow2 is not monitored.");
+  }
   else if (status == S_WARNING && (prevStatus != S_WARNING || warn != prevWarnReason))
     pushAlert("warning", warn);
   else if (status == S_NORMAL && prevStatus != S_NORMAL)
@@ -542,6 +627,7 @@ void hwLine(const char *part, bool ok, const String &msg, String &problems) {
 
 void flowLine(int i, String &problems) {
   const char *name = i == 0 ? "Flow 1" : "Flow 2";
+  if (!FLOW_SENSORS_FITTED) { hwLine(name, true, "not used (FLOW_SENSORS_FITTED = false)", problems); return; }
   uint32_t p = hwFlowPulses[i];
   String pin = String("GPIO") + FLOW_PINS[i];
   if (hwFlowGlitches[i] > 50)   // edges far faster than any water flow: the signal wire is floating or picking up noise
@@ -594,6 +680,15 @@ void hardwareReport() {
 
   flowLine(0, problems);
   flowLine(1, problems);
+
+  // The rate seen here, with no leak, is the number to put in FILL_RATE_CM_PER_MIN
+  if (levelRisePct >= 0)
+    Serial.printf("  %-13s: tank rising %.1f cm/min = %d%% of normal (%.1f cm/min set; leak below %d%%)%s\n", "Level check",
+                  levelRiseCm * 60.0f / levelWindowSec(), levelRisePct, FILL_RATE_CM_PER_MIN, (int)(LEVEL_LEAK_RATIO * 100),
+                  levelLeak ? "  LEAK LATCHED" : "");
+  else
+    Serial.printf("  %-13s: %s%s\n", "Level check", levelState,
+                  pumpOn ? "" : " (only measures while the pump runs)");
 
   String relay = String("pump ") + (pumpOn ? "ON" : "OFF") + ", GPIO" + PIN_RELAY + " " + (digitalRead(PIN_RELAY) ? "HIGH" : "LOW") +
                  " (relay should be " + (pumpOn ? "pulled in, LED on" : "released, LED off") + "), switched " +
@@ -660,6 +755,13 @@ void publishSnapshot() {
   root.set("hardware/levelCm", r1(levelCm));            // the twin's delivery-tank level
   root.set("hardware/levelFault", sensorFault || !levelKnown);
   root.set("hardware/followingTwin", following);
+  root.set("hardware/levelLeak", levelLeak);
+  root.set("hardware/levelCheck/state", levelState);
+  root.set("hardware/levelCheck/risePct", levelRisePct);
+  root.set("hardware/levelCheck/abnormalSec", (int)levelAbnormalSec);
+  root.set("hardware/levelCheck/persistSec", (int)LEVEL_PERSIST_SEC);
+  root.set("hardware/levelCheck/windowSec", (int)levelWindowSec());
+  root.set("hardware/levelCheck/limitPct", (int)(LEVEL_LEAK_RATIO * 100));
 
   root.set("hardware/deviceId", DEVICE_ID);
   root.set("hardware/firmware", FW_VERSION);
@@ -767,9 +869,10 @@ void loop() {
     if (pumpOn) hwPumpOnSec++;
     readLevel();
     updateFollowing(now);
+    checkLevelRate(now);
     if (following) runFollow();
     else {
-      updateLeak(now);
+      if (FLOW_SENSORS_FITTED) updateLeak(now);
       checkDryRun(now);
       runPumpControl(now);
       evaluateStatus();

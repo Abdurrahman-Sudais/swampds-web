@@ -14,6 +14,7 @@
  *   system/hardwareLinked  true while the delivery level comes from the prototype's sensor
  *   hil/status, hil/pump, hil/heartbeat   outputs for the prototype to mirror (hardware-in-the-loop):
  *     the ESP32 drives its LEDs, buzzer and pump relay from these while the heartbeat keeps changing
+ *   hil/reset          count of alarm resets; a change clears the prototype's latched level leak
  *   alerts/<pushId>    { time, severity, message, timestamp, source }
  *     - one is written when the twin connects to / disconnects from the dashboard
  *   pumpHistory/<pushId>  { date, start, end, duration, startTimestamp }
@@ -27,6 +28,8 @@
  *
  * WHAT THE TWIN READS FROM THE PROTOTYPE (written by the ESP32):
  *   hardware/levelCm, hardware/levelFault, hardware/lastSeen   the real delivery-tank level
+ *   hardware/levelLeak, hardware/levelCheck/{state, risePct, abnormalSec, persistSec, windowSec, limitPct}
+ *     the prototype's level-rate leak check (rise of the tank vs. its normal fill rate)
  */
 
 import { PUMP_ON_CM, PUMP_OFF_CM, validatePumpThresholds, levelPct } from './config.js';
@@ -72,6 +75,7 @@ export function toSnapshot(sim, config, now, pumpStartedAt = null) {
       status: STATUS_TEXT[sim.status] ?? 'NORMAL',
       pump: sim.pumpOn,
       heartbeat: now,
+      reset: sim.resets,
     },
     twin: {
       valves: { A: sim.valves.A },
@@ -208,6 +212,26 @@ export function measuredLevelPct(hardware, config) {
   const cm = hardware?.levelCm;
   if (!Number.isFinite(cm) || hardware.levelFault === true) return null;
   return Math.min(100, Math.max(0, (cm / config.deliveryHeightCm) * 100));
+}
+
+const int = (v) => (Number.isFinite(v) ? v : null);
+
+/**
+ * hardware/ node -> the prototype's level-rate check, or null when the firmware does not run one.
+ * risePct is null while it is not measuring (pump off, settling, window filling).
+ */
+export function levelCheckFromHardware(hardware) {
+  const c = hardware?.levelCheck;
+  if (!c || typeof c.state !== 'string') return null;
+  return {
+    state: c.state,
+    risePct: Number.isFinite(c.risePct) && c.risePct >= 0 ? c.risePct : null,
+    abnormalSec: int(c.abnormalSec) ?? 0,
+    persistSec: int(c.persistSec),
+    windowSec: int(c.windowSec),
+    limitPct: int(c.limitPct),
+    leak: hardware.levelLeak === true,
+  };
 }
 
 // Single-publisher lock

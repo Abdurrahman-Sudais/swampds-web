@@ -87,3 +87,9 @@ export function reliableLeakOpening(config) {
 export const SEGMENTS = {
   A: { valve: 'A', from: 'F1', to: 'F2', label: 'F1 → F2 (Valve A)' },
 };
+
+/** Everything that can be named in leakSegments: the flow segment, plus the prototype's level-rate check. */
+export const LEAK_SOURCES = {
+  ...SEGMENTS,
+  L: { valve: null, from: 'Pump', to: 'Tank', label: 'Pump → Tank (level-rate check)' },
+};

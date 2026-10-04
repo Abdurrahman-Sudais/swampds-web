@@ -9,14 +9,14 @@ import { useFirebaseBridge } from './useFirebaseBridge.js';
  * Its own component so the twin's 0.7 s ticks re-render only this, not the dashboard.
  */
 export default function BackgroundTwin() {
-  const twin = useTwin();
+  const twin = useTwin({ initialMode: 'manual' }); // it drives the real pump: never start it unasked
   useFirebaseBridge({
     sim: twin.sim,
     config: twin.config,
     auto: 'background',
     actions: {
       setMode: twin.setMode, setManualCommand: twin.setManualCommand,
-      updateConfig: twin.updateConfig, setMeasuredLevel: twin.setMeasuredLevel,
+      updateConfig: twin.updateConfig, setHardware: twin.setHardware,
     },
   });
   return null;

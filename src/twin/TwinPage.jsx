@@ -22,7 +22,7 @@ import { useBuzzer } from './useBuzzer.js';
 import { useMediaQuery } from './useMediaQuery.js';
 import { useTankStyle } from './useTankStyle.js';
 import { deriveOutputs } from './outputs.js';
-import { SEGMENTS } from './config.js';
+import { LEAK_SOURCES } from './config.js';
 import { TANK_STYLES } from './tankVariants/index.js';
 import { formatElapsed } from './format.js';
 
@@ -78,7 +78,7 @@ function saveTheme(dark) {
  * into the operator dashboard.
  */
 export default function TwinPage() {
-  const twin = useTwin();
+  const twin = useTwin({ initialMode: 'manual' }); // it drives the real pump: never start it unasked
   const { sim, config, startedAt, setValve, setManualCommand } = twin;
 
   // Link to the operator dashboard (Firebase). Connects on load when this browser is signed in
@@ -89,7 +89,7 @@ export default function TwinPage() {
     auto: 'takeover',
     actions: {
       setMode: twin.setMode, setManualCommand: twin.setManualCommand,
-      updateConfig: twin.updateConfig, setMeasuredLevel: twin.setMeasuredLevel,
+      updateConfig: twin.updateConfig, setHardware: twin.setHardware,
     },
   });
   const hardwareLinked = sim.measuredDelivery !== null;
@@ -254,9 +254,9 @@ export default function TwinPage() {
               <span>
                 <strong>Pump Tripped:</strong> Confirmed leak in{' '}
                 <span className="font-semibold underline">
-                  {sim.leakSegments.map((id) => SEGMENTS[id].label).join(' & ')}
+                  {sim.leakSegments.map((id) => LEAK_SOURCES[id].label).join(' & ')}
                 </span>
-                . Close the valve to reset.
+                . {sim.leakSegments.includes('L') ? 'Fix the leak, then reset.' : 'Close the valve to reset.'}
               </span>
             </div>
             <button

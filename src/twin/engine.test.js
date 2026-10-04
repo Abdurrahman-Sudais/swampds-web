@@ -251,6 +251,13 @@ test('every leak preset opens a valve far enough to be detected with default set
   }
 });
 
+test('a twin started in manual mode never starts the pump by itself', () => {
+  let s = createInitialState({ mode: 'manual' });
+  for (let i = 0; i < 20; i++) s = step(s, DEFAULT_CONFIG, DEFAULT_CONFIG.tickSec, () => 0.5);
+  assert.equal(s.mode, 'manual');
+  assert.equal(s.pumpOn, false);
+});
+
 test('a linked hardware level replaces the simulated delivery tank, and the simulation resumes from it when unlinked', () => {
   let s = setMeasuredLevel(createInitialState(), 40);
   assert.equal(s.tanks.delivery, 40);

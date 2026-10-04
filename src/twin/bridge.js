@@ -12,7 +12,7 @@
 import {
   toSnapshot, flatten, shouldPublishEvent, eventToAlert, connectionAlert,
   createPumpTracker, trackPump, controlIntents, canAcquireLock, pumpLevelsFromDb,
-  measuredLevelPct, PUBLISH_INTERVAL_MS, HARDWARE_STALE_MS,
+  measuredLevelPct, levelCheckFromHardware, PUBLISH_INTERVAL_MS, HARDWARE_STALE_MS,
 } from './contract.js';
 
 const norm = (v) => (typeof v === 'string' ? v.toLowerCase() : null);
@@ -27,7 +27,8 @@ const norm = (v) => (typeof v === 'string' ? v.toLowerCase() : null);
  *   getConfig: () => object,
  *   applyIntent: (intent: object) => void,   apply a dashboard command to the twin
  *   applyConfig?: (patch: object) => void,   apply admin-set pump levels (config/) to the twin
- *   applyMeasuredLevel?: (pct: number|null) => void,   real delivery level from the prototype, null = none
+ *   applyHardware?: (hw: { levelPct: number|null, levelCheck: object|null }) => void,
+ *                                         the prototype's real level and level-rate check; nulls = not linked
  *   onStatus: (status: object) => void,
  *   now?: () => number,
  *   setIntervalFn?: Function, clearIntervalFn?: Function,
@@ -36,7 +37,7 @@ const norm = (v) => (typeof v === 'string' ? v.toLowerCase() : null);
 export function createBridge(deps) {
   const {
     api, db, clientId, identity, getSim, getConfig, applyIntent, applyConfig = () => {},
-    applyMeasuredLevel = () => {}, onStatus,
+    applyHardware = () => {}, onStatus,
     now = Date.now, setIntervalFn = setInterval, clearIntervalFn = clearInterval,
   } = deps;
   const { ref, update, push, remove, onValue, runTransaction, onDisconnect } = api;
@@ -62,10 +63,10 @@ export function createBridge(deps) {
   const logConnection = (kind, timestamp) =>
     push(ref(db, 'alerts'), connectionAlert(kind, identity.email, timestamp)).catch(() => {});
 
-  /** The real level while the ESP32 keeps reporting; null once it goes quiet or reports a fault. */
-  function currentMeasuredLevel(t) {
-    if (hw.receivedAt === null || t - hw.receivedAt > HARDWARE_STALE_MS) return null;
-    return measuredLevelPct(hw.value, getConfig());
+  /** What the ESP32 reports while it keeps reporting; nulls once it goes quiet (the level also on a fault). */
+  function currentHardware(t) {
+    if (hw.receivedAt === null || t - hw.receivedAt > HARDWARE_STALE_MS) return { levelPct: null, levelCheck: null };
+    return { levelPct: measuredLevelPct(hw.value, getConfig()), levelCheck: levelCheckFromHardware(hw.value) };
   }
 
   async function fail(error) {
@@ -130,7 +131,7 @@ export function createBridge(deps) {
           if (lastSeen !== null && lastSeen !== hw.lastSeen) hw.receivedAt = now();
           hw.value = value;
           hw.lastSeen = lastSeen;
-          if (running) applyMeasuredLevel(currentMeasuredLevel(now()));
+          if (running) applyHardware(currentHardware(now()));
         }),
         onValue(lockRef, (snap) => {
           const lock = snap.val();
@@ -143,7 +144,7 @@ export function createBridge(deps) {
 
       running = true;
       applyConfig(pumpLevelsFromDb(dbConfig)); // the levels already set before this twin connected
-      applyMeasuredLevel(currentMeasuredLevel(t));
+      applyHardware(currentHardware(t));
       logConnection('connected', t); // visible on the dashboard: an alert, not just the "simulated data" banner
       await publish();
       timer = setIntervalFn(() => { publish().catch(fail); }, PUBLISH_INTERVAL_MS);
@@ -166,7 +167,7 @@ export function createBridge(deps) {
     unsubs.forEach((unsubscribe) => unsubscribe());
     unsubs = [];
 
-    if (wasRunning) applyMeasuredLevel(null); // no longer receiving the prototype's readings
+    if (wasRunning) applyHardware({ levelPct: null, levelCheck: null }); // no longer receiving the prototype's readings
     if (wasRunning && release) {
       try {
         await remove(ref(db, 'hil'));          // the prototype stops mirroring this twin
@@ -190,7 +191,7 @@ export function createBridge(deps) {
     publishing = true;
     try {
       const t = now();
-      applyMeasuredLevel(currentMeasuredLevel(t)); // unlinks the level once the ESP32 goes quiet
+      applyHardware(currentHardware(t)); // unlinks the prototype once the ESP32 goes quiet
       const sim = getSim();
 
       // Advance the pump-session tracker first, so this tick's snapshot carries an up-to-date
