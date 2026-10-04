@@ -37,7 +37,7 @@ const NOT_ADMIN_MESSAGE = 'This account is view-only and cannot connect the Digi
  *   'background' connect on load, and keep retrying while another twin holds the lock (the dashboard)
  *
  * @param {{ sim: object, config: object, auto?: false|'takeover'|'background',
- *   actions: { setMode: Function, setManualCommand: Function, updateConfig: Function, setMeasuredLevel?: Function } }} args
+ *   actions: { setMode: Function, setManualCommand: Function, updateConfig: Function, setHardware?: Function } }} args
  */
 export function useFirebaseBridge({ sim, config, actions, auto = false }) {
   const [status, setStatus] = useState({ state: 'off' });
@@ -83,7 +83,7 @@ export function useFirebaseBridge({ sim, config, actions, auto = false }) {
         ? actionsRef.current.setMode(intent.value, 'dashboard')
         : actionsRef.current.setManualCommand(intent.value, 'dashboard')),
       applyConfig: (patch) => actionsRef.current.updateConfig?.(patch),
-      applyMeasuredLevel: (pct) => actionsRef.current.setMeasuredLevel?.(pct),
+      applyHardware: (hw) => actionsRef.current.setHardware?.(hw),
       onStatus: setStatus,
       // keep publishing at full rate while the twin's tab is in the background
       setIntervalFn: setBackgroundInterval,

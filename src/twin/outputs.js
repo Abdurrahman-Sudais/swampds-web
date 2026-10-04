@@ -3,7 +3,7 @@
  * LEDs, buzzer, relay, and the OLED display text.
  */
 
-import { SEGMENTS } from './config.js';
+import { LEAK_SOURCES } from './config.js';
 
 const OLED_SWAP_SEC = 2; // during a leak the OLED alternates between screens
 
@@ -26,7 +26,7 @@ export function deriveOutputs(state) {
   const lines = showWarning
     ? [
         '!! LEAK DETECTED !!',
-        `Section: ${leakSegments.map((id) => SEGMENTS[id].from + '-' + SEGMENTS[id].to).join(', ')}`,
+        `Section: ${leakSegments.map((id) => LEAK_SOURCES[id].from + '-' + LEAK_SOURCES[id].to).join(', ')}`,
         'Pump: OFF (cut-off)',
         'Close valve, then reset',
       ]

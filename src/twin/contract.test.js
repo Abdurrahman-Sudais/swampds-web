@@ -5,7 +5,7 @@ import { DEFAULT_CONFIG as CFG } from './config.js';
 import { createInitialState, step, setValve, setMode, setMeasuredLevel } from './engine.js';
 import {
   toSnapshot, flatten, shouldPublishEvent, eventToAlert, connectionAlert, formatDuration,
-  createPumpTracker, trackPump, controlIntents, canAcquireLock, describeDataSource, measuredLevelPct,
+  createPumpTracker, trackPump, controlIntents, canAcquireLock, describeDataSource, measuredLevelPct, levelCheckFromHardware,
   DATA_SOURCE, LOCK_TTL_MS, STALE_AFTER_MS,
 } from './contract.js';
 
@@ -142,7 +142,7 @@ test('snapshot carries the outputs the prototype mirrors (hil/) and whether hard
   let sim = setValve(createInitialState(), 'A', 100);
   sim = run(sim, 40);                                       // leak confirmed, pump cut
   const snap = toSnapshot(sim, CFG, 7_000);
-  assert.deepEqual(snap.hil, { status: 'LEAK', pump: false, heartbeat: 7_000 });
+  assert.deepEqual(snap.hil, { status: 'LEAK', pump: false, heartbeat: 7_000, reset: 0 });
   assert.equal(snap.system.hardwareLinked, false);
   assert.equal(toSnapshot(setMeasuredLevel(sim, 30), CFG, 7_000).system.hardwareLinked, true);
 });
@@ -160,4 +160,12 @@ test('data source says hybrid when the twin publishes with hardware linked', () 
   const meta = { source: DATA_SOURCE, online: true, hardwareLinked: true, receivedAt: now - 1000 };
   assert.equal(describeDataSource(meta, now).kind, 'hybrid');
   assert.equal(describeDataSource({ ...meta, online: false }, now).kind, 'offline');
+});
+
+test('level-rate check: parsed from hardware/, absent on firmware without it', () => {
+  const hw = { levelLeak: true, levelCheck: { state: 'leak', risePct: 20, abnormalSec: 6, persistSec: 6, windowSec: 15, limitPct: 60 } };
+  assert.deepEqual(levelCheckFromHardware(hw),
+    { state: 'leak', risePct: 20, abnormalSec: 6, persistSec: 6, windowSec: 15, limitPct: 60, leak: true });
+  assert.equal(levelCheckFromHardware({ ...hw, levelCheck: { ...hw.levelCheck, risePct: -1 } }).risePct, null, '-1 = not measuring');
+  assert.equal(levelCheckFromHardware({ levelCm: 5 }), null);
 });

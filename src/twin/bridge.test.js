@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { DEFAULT_CONFIG as CFG, FULL_SCALE_CM, PUMP_ON_CM, PUMP_OFF_CM } from './config.js';
-import { createInitialState, step, setValve, setMode, setManualCommand, setMeasuredLevel } from './engine.js';
+import { createInitialState, step, setValve, setMode, setManualCommand, setMeasuredLevel, setLevelCheck, acknowledgeReset } from './engine.js';
 import { createBridge } from './bridge.js';
 import { createFakeDb } from './fakeDb.js';
 import { LOCK_TTL_MS, DATA_SOURCE, HARDWARE_STALE_MS } from './contract.js';
@@ -31,7 +31,10 @@ function makeTab(fake, { clientId = 'tab-A', email = 'a@team.test', clock } = {}
         : setManualCommand(tab.sim, intent.value, 'dashboard');
     },
     applyConfig: (patch) => { tab.configs.push(patch); },
-    applyMeasuredLevel: (pct) => { tab.levels.push(pct); tab.sim = setMeasuredLevel(tab.sim, pct); },
+    applyHardware: (hw) => {
+      tab.levels.push(hw.levelPct);
+      tab.sim = setLevelCheck(setMeasuredLevel(tab.sim, hw.levelPct), hw.levelCheck);
+    },
     onStatus: (s) => tab.statuses.push(s),
     now: () => clock.t,
     setIntervalFn: (fn) => { tab.interval = fn; return 1; },
@@ -351,7 +354,7 @@ test('hardware-in-the-loop: the ESP32 level feeds the twin, and the twin publish
   assert.equal(tab.sim.tanks.delivery, 50, 'real level applied on connect');
   clock.t += 1000; await tab.interval();
   assert.equal(fake.get('system/hardwareLinked'), true);
-  assert.deepEqual(fake.get('hil'), { status: 'NORMAL', pump: false, heartbeat: 11_000 });
+  assert.deepEqual(fake.get('hil'), { status: 'NORMAL', pump: false, heartbeat: 11_000, reset: 0 });
 
   fake.write('hardware', { levelCm: 3.5, levelFault: false, lastSeen: 2 });
   assert.equal(tab.sim.tanks.delivery, 25, 'new readings apply as they arrive');
@@ -384,4 +387,29 @@ test('hardware-in-the-loop: disconnecting or closing the tab removes hil/, so th
   assert.ok(fake.get('hil'));
   tab2.connection.disconnect();                                    // browser closed without cleanup
   assert.equal(fake.get('hil'), null);
+});
+
+test('level-rate leak on the prototype: the twin latches it, and its Reset is passed back to the prototype', async () => {
+  const check = (state, leak) => ({ levelCm: 5, lastSeen: Math.random(), levelLeak: leak,
+    levelCheck: { state, risePct: leak ? 15 : 95, abnormalSec: leak ? 6 : 0, persistSec: 6, windowSec: 15, limitPct: 60 } });
+  const fake = createFakeDb({ hardware: check('watching', false) });
+  const clock = { t: 10_000 };
+  const tab = makeTab(fake, { clock });
+  await tab.bridge.start();
+  assert.equal(tab.sim.latched, false);
+
+  fake.write('hardware', check('leak', true));
+  assert.equal(tab.sim.latched, true);
+  assert.deepEqual(tab.sim.leakSegments, ['L']);
+  clock.t += 1000; await tab.bridge.publishNow();
+  assert.equal(fake.get('system/status'), 'LEAK');
+  assert.equal(fake.get('system/leakSegments'), 'L');
+  assert.ok(values(fake.get('alerts')).some((a) => a.severity === 'critical' && /level-rate/.test(a.message)));
+
+  const { state } = acknowledgeReset(tab.sim);
+  tab.sim = state;
+  fake.write('hardware', check('leak', true));               // prototype has not seen the reset yet
+  assert.equal(tab.sim.latched, false, 'a reset is not undone while the prototype catches up');
+  clock.t += 1000; await tab.bridge.publishNow();
+  assert.equal(fake.get('hil/reset'), 1, 'the reset reaches the prototype');
 });
