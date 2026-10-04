@@ -30,7 +30,8 @@
   LEVEL_LEAK_RATIO of that for LEVEL_PERSIST_SEC means water is being lost between
   the pump and the tank: leak alarm, pump cut. It runs in both modes and latches
   like the flow check; it clears on a mode switch or the twin's Reset (hil/reset).
-  It cannot say WHERE the leak is, and only works while the pump is running.
+  It cannot say WHERE the leak is, only works while the pump is running, and cannot
+  tell a leak from an empty source tank (both mean water is not reaching the tank).
 
   Credentials live in secrets.h (git-ignored). Copy secrets.example.h to
   secrets.h in this folder and fill it in before compiling.
@@ -58,21 +59,22 @@
 #include "secrets.h"
 
 #define DEVICE_ID      "SWAMPDS-ESP32-01"
-#define FW_VERSION     "1.5-2flow-hil-level"
+#define FW_VERSION     "1.6-2flow-hil-level"
 #define TZ_OFFSET_SEC  3600                             // Nigeria (WAT, UTC+1)
 
 // ======================= Pins =======================
 // Wiring guide (what goes where, and why these pins): README.md in this folder.
-#define PIN_TRIG 13
-#define PIN_ECHO 18
-const uint8_t FLOW_PINS[2] = {32, 33};                  // flow1 = nearest the pump, flow2 = downstream
+#define PIN_TRIG 17                                     // direct (3.3 V is enough to trigger the HC-SR04)
+#define PIN_ECHO 16                                     // through a divider: ECHO is 5 V
+const uint8_t FLOW_PINS[2] = {34, 35};                  // flow1 = nearest the pump, flow2 = downstream; through dividers.
+                                                        // Input-only pins with no internal pull-ups (none are used anyway)
 #define PIN_SDA 21
 #define PIN_SCL 22
 #define PIN_RELAY 23                                    // no boot-time activity, so the relay cannot click on during boot
-#define PIN_LED_GREEN 25
-#define PIN_LED_RED 26
-#define PIN_LED_YELLOW 27
-#define PIN_BUZZER 4                                    // not 14: GPIO14 pulses at boot, which would chirp the buzzer
+#define PIN_LED_GREEN 25                                // status NORMAL
+#define PIN_LED_RED 26                                  // status LEAK
+#define PIN_LED_BLUE 27                                 // status WARNING
+#define PIN_BUZZER 33                                   // drives the buzzer's transistor; no boot-time activity
 #define RELAY_ACTIVE_HIGH false                         // 1-channel LOW-level-trigger module: IN pulled LOW = relay ON
 
 // ======================= Tunables — keep in step with src/twin/config.js and PUMP_THRESHOLDS =======================
@@ -118,7 +120,7 @@ const float SOUND_CM_PER_US      = 0.0347;       // speed of sound at ~27 °C (N
 const uint32_t PUBLISH_MS = 2000;
 const uint32_t CONFIG_POLL_MS = 10000;                         // how often admin-set levels are re-read
 const uint32_t HIL_POLL_MS = 1000;                             // how often hil/ (the twin's outputs) is read
-const uint32_t HIL_TIMEOUT_MS = 8000;                          // twin heartbeat unchanged this long = stop following
+const uint32_t HIL_TIMEOUT_MS = 15000;                         // twin heartbeat unchanged this long = stop following
 const uint32_t WIFI_RETRY_MS = 30000;                          // restart a Wi-Fi attempt only after this long: phone
                                                                // hotspots can take over 10 s to let a device join
 
@@ -467,7 +469,10 @@ void streamTimeoutCb(bool t) { if (t) Serial.println("stream timeout, resuming")
 // ======================= Twin link (hardware-in-the-loop) =======================
 void pollHil(uint32_t now) {
   if (!online()) return;
-  if (!Firebase.RTDB.get(&fbdoWrite, "hil")) return;    // read error: keep the last state, the timeout covers it
+  if (!Firebase.RTDB.get(&fbdoWrite, "hil")) {         // read error: keep the last state, the timeout covers it
+    Serial.printf("twin link read failed: %s\n", fbdoWrite.errorReason().c_str());
+    return;
+  }
   if (fbdoWrite.dataType() != "json") { hilBeatAt = 0; return; }   // hil/ removed: the twin disconnected
   FirebaseJson *j = fbdoWrite.to<FirebaseJson *>();
   FirebaseJsonData st, pump, beat;
@@ -505,7 +510,8 @@ void updateFollowing(uint32_t now) {
 }
 
 void runFollow() {
-  status = levelLeak || hilStatus == "LEAK" ? S_LEAK : hilStatus == "WARNING" ? S_WARNING : S_NORMAL;
+  status = levelLeak || hilStatus == "LEAK" ? S_LEAK
+         : hilStatus == "WARNING" || levelAbnormalSec > 0 ? S_WARNING : S_NORMAL;
   // The twin decides, but the real tank has the last word: never pump into a full tank, blind,
   // or while this board's own level check has found water going missing.
   bool safe = levelKnown && !sensorFault && levelCm < DELIVERY_HEIGHT_CM && !levelLeak;
@@ -553,6 +559,7 @@ void evaluateStatus() {
   if (sensorFault) warn = "Water level sensor is not responding.";
   else if (holdActive(millis())) warn = "Pump stopped after running without flow.";
   else if (levelKnown && levelCm < LOW_LEVEL_WARN_CM) warn = "Water level is low (" + String(levelCm, 1) + " cm).";
+  else if (levelAbnormalSec > 0) warn = "Tank is filling slower than normal - checking for a leak.";
 
   status = anyLeak() ? S_LEAK : (warn.length() ? S_WARNING : S_NORMAL);
 
@@ -560,7 +567,7 @@ void evaluateStatus() {
   if (status == S_LEAK && ls != prevLeakStr) {
     if (levelLeak && prevLeakStr.indexOf('L') < 0)
       pushAlert("critical", "Leak detected by the level-rate check: with the pump on, the tank rose " + String(levelRiseCm, 1) +
-                " cm in " + levelWindowSec() + " s, normally " + String(levelExpectedCm, 1) + " cm. Water is being lost between the pump and the tank. Pump cut off.");
+                " cm in " + levelWindowSec() + " s, normally " + String(levelExpectedCm, 1) + " cm. Water is being lost between the pump and the tank, or the source tank has run dry. Pump cut off.");
     if (leakA && prevLeakStr.indexOf('A') < 0)
       pushAlert("critical", "Leak detected between the flow sensors. Flow is dropping from flow1 to flow2 — note that anything downstream of flow2 is not monitored.");
   }
@@ -575,7 +582,7 @@ void evaluateStatus() {
 
 void updateIndicators() {
   digitalWrite(PIN_LED_GREEN,  status == S_NORMAL);
-  digitalWrite(PIN_LED_YELLOW, status == S_WARNING);
+  digitalWrite(PIN_LED_BLUE, status == S_WARNING);
   digitalWrite(PIN_LED_RED,    status == S_LEAK);
 }
 
@@ -661,8 +668,12 @@ void hardwareReport() {
 
   if (oledAddr) hwLine("OLED", true, "found at 0x" + String(oledAddr, HEX), problems);
   else {
-    String seen = "";
-    for (uint8_t a = 1; a < 127; a++) { Wire.beginTransmission(a); if (Wire.endTransmission() == 0) seen += " 0x" + String(a, HEX); }
+    static String seen = "";
+    static bool scanned = false;      // full scan once per boot: with nothing answering it stalls the loop
+    if (!scanned) {
+      scanned = true;
+      for (uint8_t a = 1; a < 127; a++) { Wire.beginTransmission(a); if (Wire.endTransmission() == 0) seen += " 0x" + String(a, HEX); }
+    }
     hwLine("OLED", false, "not found. Check SDA->GPIO" + String(PIN_SDA) + ", SCL->GPIO" + PIN_SCL + " (try swapping), VCC->3.3V, GND. I2C devices seen:" +
            (seen.length() ? seen + " (wrong address, or not an SSD1306)" : String(" none")), problems);
   }
@@ -697,7 +708,7 @@ void hardwareReport() {
   else hwLine("Relay", true, relay + ". If it clicks more than this, it is power or wiring", problems);
 
   const char *st = status == S_LEAK ? "LEAK" : status == S_WARNING ? "WARNING" : "NORMAL";
-  const char *led = status == S_LEAK ? "RED (and the buzzer)" : status == S_WARNING ? "YELLOW" : "GREEN";
+  const char *led = status == S_LEAK ? "RED (and the buzzer)" : status == S_WARNING ? "BLUE" : "GREEN";
   Serial.printf("  %-13s: only %s should be lit (status %s)\n", "LEDs", led, st);
 
   uint32_t heap = ESP.getFreeHeap();
@@ -711,6 +722,7 @@ void hardwareReport() {
 }
 
 void updateDisplay() {
+  if (!oledAddr) return;
   display.clearDisplay(); display.setCursor(0, 0);
   display.printf("SWAMPDS   %s\n", online() ? "ONLINE" : "OFFLINE");
   if (wifiUp) display.printf("IP %s\n", WiFi.localIP().toString().c_str());
@@ -801,7 +813,7 @@ void setup() {
   digitalWrite(PIN_RELAY, RELAY_ACTIVE_HIGH ? LOW : HIGH);
   pinMode(PIN_RELAY, OUTPUT);
   digitalWrite(PIN_RELAY, RELAY_ACTIVE_HIGH ? LOW : HIGH);
-  pinMode(PIN_LED_GREEN, OUTPUT); pinMode(PIN_LED_YELLOW, OUTPUT); pinMode(PIN_LED_RED, OUTPUT);
+  pinMode(PIN_LED_GREEN, OUTPUT); pinMode(PIN_LED_BLUE, OUTPUT); pinMode(PIN_LED_RED, OUTPUT);
   pinMode(PIN_TRIG, OUTPUT); pinMode(PIN_ECHO, INPUT);
   ledcAttach(PIN_BUZZER, 2000, 8); ledcWriteTone(PIN_BUZZER, 0);
 
@@ -813,11 +825,11 @@ void setup() {
   pinMode(FLOW_PINS[1], INPUT);
   attachInterrupt(digitalPinToInterrupt(FLOW_PINS[0]), isr0, RISING);
   attachInterrupt(digitalPinToInterrupt(FLOW_PINS[1]), isr1, RISING);
-  // GPIO34 (formerly flow3) is now free — available if you add a sensor back later.
 
   // begin() must run even when the OLED is missing: every display call writes into the buffer it
   // allocates. The hardware check reports the result once loop() is running.
   Wire.begin(PIN_SDA, PIN_SCL);
+  Wire.setTimeOut(20);                                  // ms: a stuck or empty bus fails fast instead of stalling the loop
   oledAddr = findOled();
   if (!display.begin(SSD1306_SWITCHCAPVCC, oledAddr ? oledAddr : 0x3C)) Serial.println("OLED: not enough memory for the display buffer");
   display.setTextColor(SSD1306_WHITE); display.setTextSize(1);

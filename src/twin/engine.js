@@ -196,16 +196,19 @@ function runDetection(s, config, dt) {
   if (next.latched) return { ...next, status: 'leak' };
 
   const pending = SEGMENT_IDS.filter((id) => segments[id].abnormalFor > 0);
-  const status = pending.length > 0 ? 'warning' : 'normal';
+  const levelPending = s.levelCheck?.abnormalSec > 0;   // the prototype's level-rate check is verifying
+  const status = pending.length > 0 || levelPending ? 'warning' : 'normal';
   next = { ...next, status };
 
   if (status === 'warning' && s.status === 'normal') {
     next = addEvent(
       next, 'warning', 'system',
-      `Flow difference above ${config.tolerancePct}% on segment ${pending.join(' & ')} - watching for ${config.persistSec} s before declaring a leak.`,
+      pending.length > 0
+        ? `Flow difference above ${config.tolerancePct}% on segment ${pending.join(' & ')} - watching for ${config.persistSec} s before declaring a leak.`
+        : `Tank is filling slower than normal - watching for ${s.levelCheck.persistSec ?? 'a few'} s before declaring a leak.`,
     );
   } else if (status === 'normal' && s.status === 'warning') {
-    next = addEvent(next, 'info', 'system', 'Flow difference returned within tolerance before the persistence window - no leak declared.');
+    next = addEvent(next, 'info', 'system', 'Readings returned within tolerance before the persistence window - no leak declared.');
   }
   return next;
 }
@@ -307,7 +310,7 @@ export function setLevelCheck(state, check) {
     ? `the tank rose only ${check.risePct}% of its normal rate for ${check.abnormalSec} s`
     : 'the tank stopped rising at its normal rate';
   return addEvent(next, 'critical', 'system',
-    `LEAK CONFIRMED by the level-rate check: with the pump on, ${detail}. Water is being lost between the pump and the tank. Pump cut off, alarm on.`);
+    `LEAK CONFIRMED by the level-rate check: with the pump on, ${detail}. Water is being lost between the pump and the tank, or the source tank has run dry. Pump cut off, alarm on.`);
 }
 
 /** Refill the source tank to 100 % so the demo can be run again. */

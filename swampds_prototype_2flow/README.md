@@ -19,10 +19,10 @@ How to wire the SWAMPDS prototype from scratch: the ESP32, both flow sensors, th
 | 1 | 0.96" OLED, 128 × 64, **SSD1306, I2C** (4 pins) | Not the 1.3" SH1106; that needs a different library |
 | 1 | 1-channel **5 V relay module, low-level trigger** | Pins `DC+ DC- IN`, contacts `COM NO NC` |
 | 1 | Small DC water pump + its own power supply | e.g. 12 V pump with a 12 V adapter |
-| 3 | 5 mm LEDs: green, yellow, red | |
-| 3 | 220 Ω resistors | One per LED |
-| 1 | Passive buzzer (3.3–5 V) | The firmware plays a tone; a passive buzzer is the right type |
-| 1 | 100 Ω resistor | In series with the buzzer |
+| 3 | 5 mm LEDs: green, blue, red | |
+| 3 | 330 Ω resistors | One per LED |
+| 1 | Passive buzzer (5 V) | The firmware plays a tone; a passive buzzer is the right type |
+| 1 | NPN transistor (2N2222, BC547 or S8050) + 1 kΩ resistor | Drives the buzzer from the 5 V rail |
 | 3 | 10 kΩ resistors | Top half of each voltage divider |
 | 3 | 20 kΩ resistors (or 2 × 10 kΩ in series each) | Bottom half of each voltage divider |
 | 2 | 10 nF ceramic capacitors (optional, recommended) | Filters noise on the flow-sensor signals |
@@ -38,17 +38,17 @@ How to wire the SWAMPDS prototype from scratch: the ESP32, both flow sensors, th
 
 | ESP32 pin | Connects to | Direction | Notes |
 |---|---|---|---|
-| **GPIO32** | Flow sensor 1 (near the pump), yellow wire | in | Through a **10k/20k divider** |
-| **GPIO33** | Flow sensor 2 (downstream), yellow wire | in | Through a **10k/20k divider** |
-| **GPIO13** | HC-SR04 `TRIG` | out | 3.3 V is enough to trigger it |
-| **GPIO18** | HC-SR04 `ECHO` | in | Through a **10k/20k divider** (ECHO is 5 V) |
+| **GPIO34** | Flow sensor 1 (near the pump), yellow wire | in | Through a **10k/20k divider** |
+| **GPIO35** | Flow sensor 2 (downstream), yellow wire | in | Through a **10k/20k divider** |
+| **GPIO17** | HC-SR04 `TRIG` | out | Direct: 3.3 V is enough to trigger it |
+| **GPIO16** | HC-SR04 `ECHO` | in | Through a **10k/20k divider** (ECHO is 5 V) |
 | **GPIO21** | OLED `SDA` | I2C | |
 | **GPIO22** | OLED `SCL` | I2C | |
 | **GPIO23** | Relay module `IN` | out | LOW = relay on = pump on |
-| **GPIO25** | Green LED (through 220 Ω) | out | Status NORMAL |
-| **GPIO27** | Yellow LED (through 220 Ω) | out | Status WARNING |
-| **GPIO26** | Red LED (through 220 Ω) | out | Status LEAK |
-| **GPIO4** | Buzzer (through 100 Ω) | out | Sounds during a leak |
+| **GPIO25** | Green LED (through 330 Ω) | out | Status NORMAL |
+| **GPIO27** | Blue LED (through 330 Ω) | out | Status WARNING |
+| **GPIO26** | Red LED (through 330 Ω) | out | Status LEAK |
+| **GPIO33** | Buzzer transistor base (through 1 kΩ) | out | Sounds during a leak |
 | **3V3** | OLED `VCC` | power | |
 | **VIN / 5V** | 5 V rail | power | See [Power](#3-power) |
 | **GND** | Ground rail | power | Use more than one GND pin if you can |
@@ -63,9 +63,10 @@ The ESP32 has pins that look free but cause trouble. This map avoids all of them
 | GPIO1, GPIO3 | USB serial (uploading and the Serial Monitor) | Never |
 | GPIO0, 2, 5, 12, 15 | **Strapping pins**: their level at power-up decides how the chip boots. Something pulling on them can stop it booting or uploading | No |
 | GPIO5, 14, 15 | Put out a signal **during boot**. On the relay, that clicks the pump on at every power-up; on the buzzer, a chirp | No (that's why the relay moved off GPIO15 and the buzzer off GPIO14) |
-| GPIO34–39 | Input only, with no internal pull-ups | No (free for later sensors) |
+| GPIO34–39 | Input only, with no internal pull-ups | GPIO34/35 for the flow sensors: inputs are all they need, and the firmware uses no pull-ups anyway |
+| GPIO16, 17 | Used by the PSRAM chip on **ESP32-WROVER** modules | Yes, for the HC-SR04. Fine on the WROOM-32 this guide uses; on a WROVER board, move them |
 
-**Free for later:** GPIO16, 17, 19 (outputs or inputs) and GPIO34, 35, 36, 39 (inputs only, e.g. an analogue pressure sensor).
+**Free for later:** GPIO4, 13, 18, 19, 32 (outputs or inputs) and GPIO36, 39 (inputs only, e.g. an analogue pressure sensor).
 
 ---
 
@@ -116,10 +117,10 @@ No 20 kΩ resistors? Two 10 kΩ in series make one.
 |---|---|
 | Red | 5 V rail |
 | Black | GND rail |
-| Yellow | Divider → **GPIO32** (sensor 1) or **GPIO33** (sensor 2) |
+| Yellow | Divider → **GPIO34** (sensor 1) or **GPIO35** (sensor 2) |
 
 ```
- Yellow ──[ 10 kΩ ]──┬──────── GPIO32 (or GPIO33)
+ Yellow ──[ 10 kΩ ]──┬──────── GPIO34 (or GPIO35)
                      ├──[ 20 kΩ ]── GND
                      └──| 10 nF |── GND     (optional noise filter)
 ```
@@ -130,7 +131,7 @@ No 20 kΩ resistors? Two 10 kΩ in series make one.
 - **The firmware sets these pins to plain `INPUT`, with no internal pull-up.** With a pull-up behind the divider, a wire the sensor isn't driving sits at about 1 V, between LOW and HIGH, and fires thousands of fake pulses a second. That once made flow 2 read 4,859 L/min with the pump off. Without the pull-up, the divider's 20 kΩ pulls an undriven line cleanly to 0 V.
 - **If a sensor gives no pulses at all with water clearly flowing**, its output only pulls down and needs a pull-up. Add **10 kΩ from the yellow wire to 5 V**, on the sensor side of the divider.
 - **The firmware ignores pulses closer together than 2 ms** (faster than any real flow) and counts them as noise. The hardware report flags a sensor with lots of them.
-- **Test with a multimeter:** with the board powered and the pump off, measure GPIO32 and GPIO33 to GND. Each should read close to **0 V or 3.3 V**. Around **1–2 V** means a loose wire or a missing divider resistor.
+- **Test with a multimeter:** with the board powered and the pump off, measure GPIO34 and GPIO35 to GND. Each should read close to **0 V or 3.3 V**. Around **1–2 V** means a loose wire or a missing divider resistor.
 - **Wiring:** keep the yellow wires short, and twist each one with its black wire if the run is long.
 - **Calibration:** 7.5 pulses per second = 1 L/min (`FLOW_K` in the sketch). Fine-tune it with a jug test: run 1 L through and compare.
 
@@ -140,8 +141,8 @@ No 20 kΩ resistors? Two 10 kΩ in series make one.
 |---|---|
 | VCC | 5 V rail |
 | GND | GND rail |
-| TRIG | **GPIO13** (direct) |
-| ECHO | Divider → **GPIO18** |
+| TRIG | **GPIO17** (direct) |
+| ECHO | Divider → **GPIO16** |
 
 - **Mounting:** in the delivery tank, **face down**, square to the water surface, with the face **1.2 cm below the rim**. A tilted sensor misses its echo.
 - **Clearance:** keep it away from the tank wall and the inlet pipe, or it measures those instead of the water.
@@ -193,20 +194,28 @@ The pump's **−** goes straight to the pump supply's **−**.
 
 ### 4.6 Status LEDs
 
-Each LED: **ESP32 pin → 220 Ω resistor → LED long leg (+) → LED short leg (−) → GND**.
+Each LED: **ESP32 pin → 330 Ω resistor → LED long leg (+) → LED short leg (−) → GND**.
 
 | LED | Pin | On when |
 |---|---|---|
 | Green | GPIO25 | Status NORMAL |
-| Yellow | GPIO27 | Status WARNING: low water, level sensor fault, pump stopped for running dry |
-| Red | GPIO26 | Leak detected (latched until the mode is switched) |
+| Blue | GPIO27 | Status WARNING: low water, level sensor fault, a leak being verified |
+| Red | GPIO26 | Leak detected (latched until the mode is switched or the alarm is reset) |
+
+- **The blue LED may look dim.** A blue LED needs about 3 V of the pin's 3.3 V, leaving little for the resistor, so only ~1 mA flows. If it's hard to see, use 100 Ω for the blue one.
 
 ### 4.7 Buzzer
 
-**GPIO4 → 100 Ω → buzzer (+) → buzzer (−) → GND.** It beeps on and off during a leak.
+Driven through an NPN transistor, so it runs from the 5 V rail and is louder than a pin alone could make it. It beeps on and off during a leak.
 
+```
+ GPIO33 ──[ 1 kΩ ]── base
+                     collector ── buzzer (−)      buzzer (+) ── 5 V rail
+                     emitter   ── GND
+```
+
+- **Transistor legs:** check the pinout for your part. 2N2222 and BC547 differ (E-B-C vs C-B-E, flat face toward you).
 - **The buzzer type matters.** Use a **passive** buzzer; an **active** buzzer sounds rough with the tone the firmware plays.
-- **Loud 5 V buzzers** need more current than a pin can give. Drive them through an NPN transistor: GPIO4 → 1 kΩ → base, emitter → GND, buzzer between 5 V and collector.
 
 ---
 
@@ -246,10 +255,12 @@ Wire **one part at a time** and check it before adding the next. The firmware pr
 | Board reboots when the pump starts ("BROWNOUT" in the report) | Pump sharing the ESP32's power, or no diode across the pump |
 | Relay clicks or buzzes on its own | Same as above; or the 5 V relay driven by 3.3 V (see [4.5](#45-relay-and-pump)) |
 | Relay works backwards (on when it should be off) | Module is high-level trigger. Set `RELAY_ACTIVE_HIGH true` in the sketch, or change the module's H/L jumper |
-| Pump stops after ~15 s, "ran without flow" | Flow 1 not counting: check its divider, GPIO32, the arrow direction, and that water actually moves |
+| Pump stops after ~15 s, "ran without flow" | Flow 1 not counting: check its divider, GPIO34, the arrow direction, and that water actually moves (only when `FLOW_SENSORS_FITTED` is true) |
+| Leak alarm on every normal fill (level-rate check) | `FILL_RATE_CM_PER_MIN` is set higher than the pump really fills. Set it to the rate the hardware check prints with no leak |
 | Leak alarm with no leak | Flow 2 counting extra pulses (noise): add the 10 nF capacitor, separate it from the pump wires. Or the sensors are swapped |
 | A flow sensor reads a huge, impossible value (hundreds or thousands of L/min) | Its signal line is floating: loose yellow or red wire, or a broken divider. Measure the pin; see [4.2](#42-flow-sensors-yf-s201--2) |
 | OLED blank, report says NOT FOUND | SDA/SCL swapped, OLED on 5 V instead of 3V3, or a loose wire |
 | Level sensor "no echo" | ECHO divider wrong, TRIG/ECHO swapped, sensor tilted or too close to the wall |
 | Upload fails ("Failed to connect") | Something wired to a strapping pin (0, 2, 5, 12, 15). Unplug it, or hold BOOT while uploading |
+| Buzzer silent | Transistor legs swapped (check E-B-C for your part), or an active buzzer instead of passive |
 | Slow Wi-Fi connection | Weak power (use the 5 V 2 A supply), 5 GHz hotspot, or the phone screen off |
