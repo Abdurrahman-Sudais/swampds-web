@@ -86,7 +86,7 @@ export default function TwinPage() {
   const bridge = useFirebaseBridge({
     sim,
     config,
-    auto: 'takeover',
+    auto: false,
     actions: {
       setMode: twin.setMode, setManualCommand: twin.setManualCommand,
       updateConfig: twin.updateConfig, setHardware: twin.setHardware,
