@@ -5,6 +5,13 @@
  * (swampds_prototype_2flow.ino). Change them in both places together.
  */
 
+/**
+ * Master switch for linking the twin to the dashboard/hardware (Firebase). false = the twin runs as a
+ * standalone simulation only: no auto-connect on the twin page, no background twin on the dashboard,
+ * and the Connect button refuses. The prototype then runs on its own (see TWIN_LINK_ENABLED in the firmware).
+ */
+export const TWIN_LINK_ENABLED = false;
+
 // Delivery tank geometry on the prototype, in cm (same names and values as the firmware).
 // The ultrasonic sensor sits inside the tank, so the highest level it can safely measure is
 // below the rim: 19 - 1.2 (sensor) - 3.8 (allowance under it; ~2 cm is its blind zone) = 14 cm = 100 %.

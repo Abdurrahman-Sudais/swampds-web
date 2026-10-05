@@ -121,6 +121,7 @@ const float SOUND_CM_PER_US      = 0.0347;       // speed of sound at ~27 °C (N
 
 const uint32_t PUBLISH_MS = 2000;
 const uint32_t CONFIG_POLL_MS = 10000;                         // how often admin-set levels are re-read
+const bool TWIN_LINK_ENABLED = false;                          // false: never follow the Digital Twin, run on this board's own sensors
 const uint32_t HIL_POLL_MS = 1000;                             // how often hil/ (the twin's outputs) is read
 const uint32_t HIL_TIMEOUT_MS = 15000;                         // twin heartbeat unchanged this long = stop following
 const uint32_t HIL_LOST_MS = 45000;                            // no successful read of hil/ this long = stop following
@@ -906,7 +907,7 @@ void loop() {
 
   if (now - lastHwReport >= HW_REPORT_MS) { lastHwReport = now; hardwareReport(); }
 
-  if (streamsStarted && now - lastHilPoll >= HIL_POLL_MS) { lastHilPoll = now; pollHil(now); }
+  if (TWIN_LINK_ENABLED && streamsStarted && now - lastHilPoll >= HIL_POLL_MS) { lastHilPoll = now; pollHil(now); }
 
   if (streamsStarted && (lastConfigPoll == 0 || now - lastConfigPoll >= CONFIG_POLL_MS)) {
     lastConfigPoll = now ? now : 1;

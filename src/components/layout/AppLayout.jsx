@@ -18,6 +18,7 @@ import { useAuth } from '../../auth/AuthContext';
 import { useUnreadAlerts } from './useUnreadAlerts';
 import { PageSkeleton } from '../skeleton/Skeleton';
 import BackgroundTwin from '../../twin/BackgroundTwin';
+import { TWIN_LINK_ENABLED } from '../../twin/config.js';
 
 // How long to hold the skeleton for the first Firebase snapshot before showing the page anyway
 // (with its empty values and the offline banner) rather than leaving it loading forever.
@@ -155,7 +156,7 @@ export default function AppLayout() {
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden font-sans">
       {/* Admins only: the database rules let only admins publish as the twin */}
-      {canEdit && <BackgroundTwin />}
+      {TWIN_LINK_ENABLED && canEdit && <BackgroundTwin />}
       <Sidebar
         navItems={NAV_ITEMS}
         isOpen={sidebarOpen}
