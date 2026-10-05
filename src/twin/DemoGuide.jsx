@@ -9,8 +9,8 @@ import { reliableLeakOpening } from './config.js';
 export default function DemoGuide({ sim, config }) {
   const steps = useMemo(() => {
     const hasLeak = sim.status === 'leak';
-    const isWatching = sim.status === 'warning' || sim.segments.A.abnormalFor > 0;
-    const isValveOpen = sim.valves.A > 0;
+    const isWatching = sim.status === 'warning' || sim.segments.A.abnormalFor > 0 || sim.segments.B.abnormalFor > 0;
+    const isValveOpen = sim.valves.A > 0 || sim.valves.B > 0;
     const pumpRunning = sim.pumpOn;
 
     return [
@@ -23,7 +23,7 @@ export default function DemoGuide({ sim, config }) {
       {
         id: 2,
         title: 'Inject Leak',
-        desc: `Open Valve A to ${reliableLeakOpening(config)}% or more.`,
+        desc: `Open Valve A or B to ${reliableLeakOpening(config)}% or more.`,
         done: isValveOpen || hasLeak,
       },
       {
@@ -41,7 +41,7 @@ export default function DemoGuide({ sim, config }) {
       {
         id: 5,
         title: 'Isolate & Reset',
-        desc: 'Close the valve and reset.',
+        desc: 'Close both valves and reset.',
         done: !hasLeak && !isValveOpen && sim.events.some((e) => e.message.includes('acknowledged')),
       },
     ];

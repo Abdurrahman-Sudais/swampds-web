@@ -1,18 +1,18 @@
 /*
-  SWAMPDS Prototype Firmware — 2 flow sensors
+  SWAMPDS Prototype Firmware — 3 flow sensors
   ------------------------------------------------------------------------
-  Same contract as swampds_prototype.ino, reduced to 2 flow sensors.
-  Only sensors/flow1 and sensors/flow2 are published — flow3 no longer
-  exists in the payload at all (make sure the dashboard/twin no longer
-  expect it).
+  Publishes sensors/flow1, flow2 and flow3: flow1 nearest the pump, flow2 at the
+  midpoint, flow3 at the end of the pipe, just before the delivery tank.
 
-  Leak detection: ONE segment ("A"), comparing flow1 (near the pump) to
-  flow2 (downstream). Anything past flow2's physical position is NOT
-  monitored — a leak there will not be detected. leakSegments can only
-  ever come back as "A" or be absent; "B" and "A,B" no longer occur.
+  Leak detection: TWO segments, each comparing neighbouring sensors.
+    "A" = flow1 -> flow2 (first half of the pipe)
+    "B" = flow2 -> flow3 (second half of the pipe)
+  A leak in A lowers flow2 AND flow3 alike, so B stays healthy and the leak is
+  located in A only. leakSegments is "A", "B" or "A,B", plus "L" from the
+  level-rate check below (e.g. "A,L"), or absent when there is no leak.
+  Pipe past flow3 is not monitored by the flow check (the level-rate check covers it).
 
-  Pins, libraries, and setup are otherwise identical to the 3-sensor
-  version — see that file's header comment for board/IDE setup.
+  Board/IDE setup and wiring: README.md in this folder.
 
   Twin link (hardware-in-the-loop): while the Digital Twin is connected to the
   dashboard it publishes hil/{status, pump, heartbeat}. This board then FOLLOWS it:
@@ -61,15 +61,16 @@
 #include "secrets.h"
 
 #define DEVICE_ID      "SWAMPDS-ESP32-01"
-#define FW_VERSION     "1.7-2flow-hil-level"
+#define FW_VERSION     "1.8-3flow-hil-level"
 #define TZ_OFFSET_SEC  3600                             // Nigeria (WAT, UTC+1)
 
 // ======================= Pins =======================
 // Wiring guide (what goes where, and why these pins): README.md in this folder.
 #define PIN_TRIG 17                                     // direct (3.3 V is enough to trigger the HC-SR04)
 #define PIN_ECHO 16                                     // through a divider: ECHO is 5 V
-const uint8_t FLOW_PINS[2] = {34, 35};                  // flow1 = nearest the pump, flow2 = downstream; through dividers.
-                                                        // Input-only pins with no internal pull-ups (none are used anyway)
+const uint8_t FLOW_PINS[3] = {34, 35, 32};              // flow1 = nearest the pump, flow2 = midpoint, flow3 = end of pipe;
+                                                        // all through dividers. 34/35 are input-only; 32 is a plain GPIO
+                                                        // (not 36/39: those pick up false edges while Wi-Fi is on)
 #define PIN_SDA 21
 #define PIN_SCL 22
 #define PIN_RELAY 23                                    // no boot-time activity, so the relay cannot click on during boot
@@ -86,8 +87,8 @@ const float SENSOR_DROP_CM       = 1.2;          // how far below the rim the ul
 const float SENSOR_CLEARANCE_CM  = 3.8;          // allowance under the sensor (HC-SR04 is blind closer than ~2 cm)
 const float SENSOR_TO_BOTTOM_CM  = TANK_HEIGHT_CM - SENSOR_DROP_CM;            // 17.8 cm
 const float DELIVERY_HEIGHT_CM   = SENSOR_TO_BOTTOM_CM - SENSOR_CLEARANCE_CM;  // 14 cm = 100 % (highest safe level)
-const float FLOW_K[2]            = {7.5, 7.5};   // YF-S201: 7.5 pulses/s per L/min (datasheet) — fine-tune each sensor with the jug test
-const float TOLERANCE_PCT        = 20.0;         // flow loss between flow1/flow2 that counts as a leak
+const float FLOW_K[3]            = {7.5, 7.5, 7.5};   // YF-S201: 7.5 pulses/s per L/min (datasheet) — fine-tune each sensor with the jug test
+const float TOLERANCE_PCT        = 20.0;         // flow lost between neighbouring sensors that counts as a leak
 const uint32_t PERSIST_SEC       = 10;
 const float MIN_FLOW_LPM         = 0.5;
 // Auto-mode pump levels. These are the DEFAULTS: admins can change them from the dashboard's
@@ -106,7 +107,7 @@ const uint8_t SENSOR_FAULT_AFTER = 5;
 
 // Flow sensors: false while they are out of service. Turns off the flow-difference leak check and the
 // dry-run stop, which would otherwise false-alarm on sensors that read 0. The level-rate check covers leaks.
-const bool FLOW_SENSORS_FITTED   = false;
+const bool FLOW_SENSORS_FITTED   = true;
 
 // Level-rate leak check. FILL_RATE_CM_PER_MIN must be MEASURED: run the pump with no leak and read
 // "Level check" in the Serial Monitor hardware report (or time a fill: cm risen / minutes).
@@ -121,7 +122,7 @@ const float SOUND_CM_PER_US      = 0.0347;       // speed of sound at ~27 °C (N
 
 const uint32_t PUBLISH_MS = 2000;
 const uint32_t CONFIG_POLL_MS = 10000;                         // how often admin-set levels are re-read
-const bool TWIN_LINK_ENABLED = false;                          // false: never follow the Digital Twin, run on this board's own sensors
+const bool TWIN_LINK_ENABLED = true;                           // false: never follow the Digital Twin, run on this board's own sensors
 const uint32_t HIL_POLL_MS = 1000;                             // how often hil/ (the twin's outputs) is read
 const uint32_t HIL_TIMEOUT_MS = 15000;                         // twin heartbeat unchanged this long = stop following
 const uint32_t HIL_LOST_MS = 45000;                            // no successful read of hil/ this long = stop following
@@ -137,8 +138,8 @@ FirebaseConfig config;
 // A YF-S201 tops out near 225 pulses/s (30 L/min), i.e. one pulse every ~4.4 ms. Edges closer
 // together than MIN_PULSE_US are electrical noise, not water: they are counted as glitches instead.
 const uint32_t MIN_PULSE_US = 2000;
-volatile uint32_t flowPulses[2] = {0, 0}, flowGlitches[2] = {0, 0};
-volatile uint32_t lastPulseUs[2] = {0, 0};
+volatile uint32_t flowPulses[3] = {0, 0, 0}, flowGlitches[3] = {0, 0, 0};
+volatile uint32_t lastPulseUs[3] = {0, 0, 0};
 void IRAM_ATTR countPulse(int i) {
   uint32_t t = (uint32_t)esp_timer_get_time();
   if (t - lastPulseUs[i] >= MIN_PULSE_US) { lastPulseUs[i] = t; flowPulses[i]++; }
@@ -146,10 +147,11 @@ void IRAM_ATTR countPulse(int i) {
 }
 void IRAM_ATTR isr0() { countPulse(0); }
 void IRAM_ATTR isr1() { countPulse(1); }
+void IRAM_ATTR isr2() { countPulse(2); }
 
 enum Status { S_NORMAL, S_WARNING, S_LEAK };
 
-float flow[2] = {0, 0};
+float flow[3] = {0, 0, 0};
 float levelPct = 0, levelCm = 0;
 uint8_t badReads = 0;
 bool sensorFault = false;
@@ -167,11 +169,11 @@ String manualCommand = "off";
 uint32_t dryRunHoldUntil = 0;
 bool dryRunHoldActive = false;   // separate flag so the millis() rollover can't fake a hold
 
-bool leakA = false;               // single segment now. LATCHED on purpose: it stays true (pump blocked in both
-                                  // modes) until the operator switches mode, so someone must inspect the pipe.
-uint32_t overSinceA = 0;
+bool leakA = false, leakB = false;   // per segment. LATCHED on purpose: they stay true (pump blocked in both
+                                     // modes) until the operator switches mode, so someone must inspect the pipe.
+uint32_t overSinceA = 0, overSinceB = 0;
 
-bool levelLeak = false;           // level-rate check, LATCHED like leakA
+bool levelLeak = false;           // level-rate check, LATCHED like leakA/leakB
 float levelHist[LEVEL_WINDOW_MAX];
 uint8_t levelHead = 0, levelSamples = 0;
 uint32_t levelAbnormalSec = 0;
@@ -214,7 +216,7 @@ uint32_t lastOledCheck = 0;
 // Hardware check (Serial Monitor). Counters cover the time since the last report.
 const uint32_t HW_REPORT_MS = 10000;
 uint32_t lastHwReport = 0;
-uint32_t hwFlowPulses[2] = {0, 0}, hwFlowGlitches[2] = {0, 0};
+uint32_t hwFlowPulses[3] = {0, 0, 0}, hwFlowGlitches[3] = {0, 0, 0};
 uint16_t hwPumpOnSec = 0, hwRelaySwitches = 0;
 uint8_t lastEchoes = 0;           // valid echoes (of 5) in the latest level reading
 float lastDistCm = -1;            // sensor-to-water distance of the latest good reading
@@ -321,32 +323,46 @@ void readLevel() {
 }
 
 void calcFlows(uint32_t dtMs) {
-  uint32_t p[2];
-  uint32_t g[2];
+  uint32_t p[3];
+  uint32_t g[3];
   noInterrupts();
-  for (int i = 0; i < 2; i++) { p[i] = flowPulses[i]; flowPulses[i] = 0; g[i] = flowGlitches[i]; flowGlitches[i] = 0; }
+  for (int i = 0; i < 3; i++) { p[i] = flowPulses[i]; flowPulses[i] = 0; g[i] = flowGlitches[i]; flowGlitches[i] = 0; }
   interrupts();
-  for (int i = 0; i < 2; i++) hwFlowGlitches[i] += g[i];
-  for (int i = 0; i < 2; i++) { flow[i] = (p[i] * 1000.0f / dtMs) / FLOW_K[i]; hwFlowPulses[i] += p[i]; }
+  for (int i = 0; i < 3; i++) hwFlowGlitches[i] += g[i];
+  for (int i = 0; i < 3; i++) { flow[i] = (p[i] * 1000.0f / dtMs) / FLOW_K[i]; hwFlowPulses[i] += p[i]; }
 }
 
-// Single segment: flow1 (near pump) vs flow2 (downstream). Anything past
-// flow2's physical location is unmonitored by design — no data for it exists.
-void updateLeak(uint32_t now) {
-  float up = flow[0], dn = flow[1];
+// One segment: the upstream sensor vs the next one downstream. Only a LOSS counts.
+// Latches once the loss has lasted PERSIST_SEC.
+void checkSegment(float up, float dn, uint32_t now, uint32_t &overSince, bool &leak) {
   bool over = up >= MIN_FLOW_LPM && ((up - dn) / up * 100.0f) > TOLERANCE_PCT;
   if (over) {
-    if (overSinceA == 0) overSinceA = now;
-    else if (now - overSinceA >= PERSIST_SEC * 1000UL) leakA = true;
-  } else overSinceA = 0;
+    if (overSince == 0) overSince = now;
+    else if (now - overSince >= PERSIST_SEC * 1000UL) leak = true;
+  } else overSince = 0;
 }
 
-bool anyLeak() { return leakA || levelLeak; }
+// Segment A: flow1 -> flow2. Segment B: flow2 -> flow3. Pipe past flow3 is not checked here.
+void updateLeak(uint32_t now) {
+  checkSegment(flow[0], flow[1], now, overSinceA, leakA);
+  checkSegment(flow[1], flow[2], now, overSinceB, leakB);
+}
 
-// "A" = flow sensors F1 -> F2, "L" = level-rate check (pump -> tank, no location)
-String leakString() { return leakA && levelLeak ? "A,L" : leakA ? "A" : levelLeak ? "L" : ""; }
+bool anyLeak() { return leakA || leakB || levelLeak; }
 
-void clearLeaks() { leakA = false; overSinceA = 0; levelLeak = false; levelAbnormalSec = 0; levelSamples = 0; snapshotDue = true; }
+// "A" = F1 -> F2, "B" = F2 -> F3, "L" = level-rate check (pump -> tank, no location); comma-separated
+String leakString() {
+  String s = "";
+  if (leakA) s += "A";
+  if (leakB) s += s.length() ? ",B" : "B";
+  if (levelLeak) s += s.length() ? ",L" : "L";
+  return s;
+}
+
+void clearLeaks() {
+  leakA = leakB = false; overSinceA = overSinceB = 0;
+  levelLeak = false; levelAbnormalSec = 0; levelSamples = 0; snapshotDue = true;
+}
 
 uint8_t levelWindowSec() {
   return (uint8_t)constrain((int)ceilf(LEVEL_MIN_RISE_CM / FILL_RATE_CM_PER_MIN * 60.0f), 10, (int)LEVEL_WINDOW_MAX - 1);
@@ -505,8 +521,8 @@ void updateFollowing(uint32_t now) {
   if (want == following) return;
   if (want) {
     following = true;
-    leakA = false; overSinceA = 0; dryRunHoldActive = false;   // the twin does the flow detection now;
-                                                                // a level leak stays latched and is reported to it
+    leakA = leakB = false; overSinceA = overSinceB = 0;         // the twin does the flow detection now;
+    dryRunHoldActive = false;                                   // a level leak stays latched and is reported to it
     Serial.println(">>> Following the Digital Twin: LEDs, buzzer and pump mirror it");
   } else {
     setPump(false);                                     // while still following, so the run is not logged twice
@@ -571,6 +587,7 @@ void evaluateStatus() {
   else if (holdActive(millis())) warn = "Pump stopped after running without flow.";
   else if (levelKnown && levelCm < LOW_LEVEL_WARN_CM) warn = "Water level is low (" + String(levelCm, 1) + " cm).";
   else if (levelAbnormalSec > 0) warn = "Tank is filling slower than normal - checking for a leak.";
+  else if (overSinceA || overSinceB) warn = String("Flow is dropping between sensors ") + (overSinceA ? "1 and 2" : "2 and 3") + " - checking for a leak.";
 
   status = anyLeak() ? S_LEAK : (warn.length() ? S_WARNING : S_NORMAL);
 
@@ -580,7 +597,9 @@ void evaluateStatus() {
       pushAlert("critical", "Leak detected by the level-rate check: with the pump on, the tank rose " + String(levelRiseCm, 1) +
                 " cm in " + levelWindowSec() + " s, normally " + String(levelExpectedCm, 1) + " cm. Water is being lost between the pump and the tank, or the source tank has run dry. Pump cut off.");
     if (leakA && prevLeakStr.indexOf('A') < 0)
-      pushAlert("critical", "Leak detected between the flow sensors. Flow is dropping from flow1 to flow2 — note that anything downstream of flow2 is not monitored.");
+      pushAlert("critical", "Leak detected in section A, between flow sensors 1 and 2: flow is dropping from flow1 to flow2. Pump cut off.");
+    if (leakB && prevLeakStr.indexOf('B') < 0)
+      pushAlert("critical", "Leak detected in section B, between flow sensors 2 and 3: flow is dropping from flow2 to flow3. Pump cut off.");
   }
   else if (status == S_WARNING && (prevStatus != S_WARNING || warn != prevWarnReason))
     pushAlert("warning", warn);
@@ -644,7 +663,7 @@ void hwLine(const char *part, bool ok, const String &msg, String &problems) {
 }
 
 void flowLine(int i, String &problems) {
-  const char *name = i == 0 ? "Flow 1" : "Flow 2";
+  const char *name = i == 0 ? "Flow 1" : i == 1 ? "Flow 2" : "Flow 3";
   if (!FLOW_SENSORS_FITTED) { hwLine(name, true, "not used (FLOW_SENSORS_FITTED = false)", problems); return; }
   uint32_t p = hwFlowPulses[i];
   String pin = String("GPIO") + FLOW_PINS[i];
@@ -702,6 +721,7 @@ void hardwareReport() {
 
   flowLine(0, problems);
   flowLine(1, problems);
+  flowLine(2, problems);
 
   // The rate seen here, with no leak, is the number to put in FILL_RATE_CM_PER_MIN
   if (levelRisePct >= 0)
@@ -729,7 +749,8 @@ void hardwareReport() {
   else                   Serial.println("  >>> All hardware OK");
   Serial.println("----------------------------------------------------------------");
 
-  hwFlowPulses[0] = hwFlowPulses[1] = 0; hwFlowGlitches[0] = hwFlowGlitches[1] = 0; hwPumpOnSec = 0; hwRelaySwitches = 0;
+  for (int i = 0; i < 3; i++) { hwFlowPulses[i] = 0; hwFlowGlitches[i] = 0; }
+  hwPumpOnSec = 0; hwRelaySwitches = 0;
 }
 
 void updateDisplay() {
@@ -740,7 +761,7 @@ void updateDisplay() {
   else        display.println("WiFi connecting...");
   display.printf("Level %d%%  %.1fcm\n", (int)round(levelPct), levelCm);
   if (following) display.println("Flow: twin model");
-  else           display.printf("F1 %.1f  F2 %.1f\n", flow[0], flow[1]);
+  else           display.printf("Flow %.1f %.1f %.1f\n", flow[0], flow[1], flow[2]);
   display.printf("Pump %s  %s\n", pumpOn ? "ON" : "OFF", following ? "TWIN" : modeAuto ? "AUTO" : "MANUAL");
   const char *st = status == S_LEAK ? "LEAK" : status == S_WARNING ? "WARNING" : "NORMAL";
   display.printf("%s %s\n", st, leakString().c_str());
@@ -761,7 +782,7 @@ void publishSnapshot() {
   if (!following) {
     root.set("sensors/flow1", r1(flow[0]));
     root.set("sensors/flow2", r1(flow[1]));
-    // No sensors/flow3 — the 2-sensor dashboard/twin must not expect this field.
+    root.set("sensors/flow3", r1(flow[2]));
     root.set("sensors/waterLevelPercent", (int)round(levelPct));
     root.set("sensors/waterLevelCm", r1(levelCm));
     root.set("sensors/lastUpdated/.sv", "timestamp");
@@ -771,7 +792,7 @@ void publishSnapshot() {
     root.set("system/pumpMode", modeAuto ? "AUTO" : "MANUAL");
     root.set("system/source", "esp32");
     root.set("system/online", true);
-    if (hasLeak) root.set("system/leakSegments", ls);   // only ever "A"; deleted below when it clears
+    if (hasLeak) root.set("system/leakSegments", ls);   // "A", "B", "A,B" (+ "L"); deleted below when it clears
     if (hasStart) root.set("system/pumpStartedAt", (double)pumpStartedMs);
   }
 
@@ -810,7 +831,7 @@ void announceBoot() {
   j.set("twin/tolerancePct", TOLERANCE_PCT);
   j.set("twin/persistSec", (int)PERSIST_SEC);
   Firebase.RTDB.updateNode(&fbdoWrite, "/", &j);
-  pushAlert("info", "Hardware connected (" DEVICE_ID "). This dashboard is now showing live sensor data (2-sensor configuration).");
+  pushAlert("info", "Hardware connected (" DEVICE_ID "). This dashboard is now showing live sensor data (3 flow sensors).");
   bootAnnounced = true;
 }
 
@@ -834,8 +855,10 @@ void setup() {
   // with water flowing, its output needs a pull-up: 10k from the yellow wire to 5 V, before the divider.)
   pinMode(FLOW_PINS[0], INPUT);
   pinMode(FLOW_PINS[1], INPUT);
+  pinMode(FLOW_PINS[2], INPUT);
   attachInterrupt(digitalPinToInterrupt(FLOW_PINS[0]), isr0, RISING);
   attachInterrupt(digitalPinToInterrupt(FLOW_PINS[1]), isr1, RISING);
+  attachInterrupt(digitalPinToInterrupt(FLOW_PINS[2]), isr2, RISING);
 
   // begin() must run even when the OLED is missing: every display call writes into the buffer it
   // allocates. The hardware check reports the result once loop() is running.

@@ -15,10 +15,11 @@ const TOOLTIP_STYLE = {
 const LINES = [
   { key: 'F1', name: 'Flow Sensor 1', color: '#10b981' },
   { key: 'F2', name: 'Flow Sensor 2', color: '#f59e0b' },
+  { key: 'F3', name: 'Flow Sensor 3', color: '#a855f7' },
 ];
 
 /**
- * @param {{ data: { time: string, F1: number, F2: number }[], noCard?: boolean, animate?: boolean }} props
+ * @param {{ data: { time: string, F1: number, F2: number, F3: number }[], noCard?: boolean, animate?: boolean }} props
  * Animation is off by default: this chart shows live data, and re-animating the lines on every
  * sample reads as lag. Memoised so live readings (every 1-2 s) don't redraw an unchanged chart.
  */

@@ -12,11 +12,13 @@ The website finds parts by NAME, so keep these names when you edit the model:
     Water_Source, Water_Delivery    water; origin on the tank floor, modelled at 100 % (14 cm), scaled by the level
     Pump_Body, Pump_Rotor           the rotor (cooling fan under the top grille) spins about the vertical axis
     Pump_LED                        lights green while the pump runs
-    Sensor_F1, Sensor_F2            YF-S201 flow sensors
-    Valve_A, Valve_A_Handle         ball valve; the lever's origin is on the stem. Lever across the pipe = closed
-    Pipe_0 .. Pipe_4                clear tubing, left to right; Pipe_2 and Pipe_3 are monitored segment A
-Anything else (board, clamps, brackets, the HC-SR04) is decoration. Parts named Pump* or Valve_A*
-are clickable on the website.
+    Sensor_F1, Sensor_F2, Sensor_F3 YF-S201 flow sensors
+    Valve_A, Valve_A_Handle         ball valves; the lever's origin is on the stem. Lever across the pipe = closed
+    Valve_B, Valve_B_Handle
+    Pipe_0 .. Pipe_6                clear tubing, left to right; Pipe_2 and Pipe_3 are monitored segment A
+                                    (F1 -> F2), Pipe_4 and Pipe_5 segment B (F2 -> F3)
+Anything else (board, clamps, brackets, the HC-SR04) is decoration. Parts named Pump*, Valve_A* or
+Valve_B* are clickable on the website.
 
 Materials the website restyles by name: Glass, Water, ClearTube (Blender cannot export the
 see-through look the browser needs, so those three are tuned in Twin3D.jsx).
@@ -46,7 +48,9 @@ SENSOR_DROP = 0.12      # HC-SR04 face 1.2 cm below the rim
 FULL_WATER = 1.4        # 14 cm of water = 100 %
 PIPE_Z = 0.45           # pipe centre height above the board
 PIPE_R = 0.1
-NODE_X = [-5, -3, -1, 1, 3, 5]   # source, pump, F1, valve A, F2, delivery
+BOARD_W = 14.8          # base board length (Twin3D.jsx frames the camera on it: SCENE_WIDTH)
+# Source, pump, F1, valve A, F2, valve B, F3, delivery: spaced so all seven tube runs are ~0.86 long.
+NODE_X = [-6, -3.85, -2.25, -0.7, 0.85, 2.4, 3.95, 6]
 
 R90 = math.radians(90)
 ALONG_X = (0, R90, 0)   # turns a Z-axis primitive to lie along X
@@ -213,7 +217,7 @@ WIRE_YELLOW = material("Wire_Yellow", (0.9, 0.72, 0.05), roughness=0.4)
 LABEL = material("Nameplate", (0.85, 0.86, 0.88), metallic=0.8, roughness=0.3)
 
 # Base board everything stands on (its top is z = 0).
-box("Base_Board", WOOD, (12.8, 2.6, 0.18), (0, 0, -0.09), round_edges=0.02)
+box("Base_Board", WOOD, (BOARD_W, 2.6, 0.18), (0, 0, -0.09), round_edges=0.02)
 
 
 # ---- Tanks -----------------------------------------------------------------------------------
@@ -260,10 +264,10 @@ def tank(side, x, fill, outlet_dir):
 
 
 source_port = tank("Source", NODE_X[0], 0.9, +1)
-delivery_port = tank("Delivery", NODE_X[5], 0.35, -1)
+delivery_port = tank("Delivery", NODE_X[7], 0.35, -1)
 
 # HC-SR04 on an aluminium bracket across the delivery tank, its face 1.2 cm below the rim.
-dx = NODE_X[5]
+dx = NODE_X[7]
 rim_top = TANK_H + 0.022
 box("Sensor_Bracket", ALU, (2 * TANK_R + 0.12, 0.14, 0.03), (dx, 0, rim_top + 0.015), round_edges=0.006)
 board_bottom = rim_top - 0.016
@@ -347,32 +351,41 @@ def flow_sensor(name, x):
 
 flow_sensor("Sensor_F1", NODE_X[2])
 flow_sensor("Sensor_F2", NODE_X[4])
+flow_sensor("Sensor_F3", NODE_X[6])
 
-# ---- Ball valve ------------------------------------------------------------------------------
-vx = NODE_X[3]
-valve = sphere("Valve_A", BRASS, 0.16, (vx, 0, PIPE_Z), scale=(1.15, 0.92, 0.92))
-vparts = [hexagon(f"valve_hex{s}", BRASS, 0.135, 0.12, (vx + s * 0.2, 0, PIPE_Z), ALONG_X) for s in (-1, 1)]
-vparts += [cylinder(f"valve_spigot{s}", BRASS, 0.075, 0.12, (vx + s * 0.31, 0, PIPE_Z), ALONG_X, verts=32,
-                    round_edges=0.005) for s in (-1, 1)]
-vparts.append(cylinder("valve_stem", BRASS, 0.032, 0.14, (vx, 0, PIPE_Z + 0.19), verts=24))
-vparts.append(hexagon("valve_gland", BRASS, 0.06, 0.05, (vx, 0, PIPE_Z + 0.15)))
-join("Valve_A", valve, *vparts)
 
-# Lever across the pipe (closed). Its origin is on the stem, so a quarter turn opens it.
-lever_z = PIPE_Z + 0.27
-lever = box("Valve_A_Handle", STEEL, (0.07, 0.16, 0.022), (vx, -0.06, lever_z), round_edges=0.006)
-grip = box("valve_grip", VINYL_RED, (0.085, 0.36, 0.04), (vx, -0.3, lever_z), round_edges=0.016)
-nut = hexagon("valve_nut", STEEL, 0.045, 0.03, (vx, 0, lever_z + 0.025))
-join("Valve_A_Handle", lever, grip, nut)
-origin_to(lever, (vx, 0, lever_z))
+# ---- Ball valves -----------------------------------------------------------------------------
+def ball_valve(name, vx):
+    valve = sphere(name, BRASS, 0.16, (vx, 0, PIPE_Z), scale=(1.15, 0.92, 0.92))
+    vparts = [hexagon(f"{name}_hex{s}", BRASS, 0.135, 0.12, (vx + s * 0.2, 0, PIPE_Z), ALONG_X) for s in (-1, 1)]
+    vparts += [cylinder(f"{name}_spigot{s}", BRASS, 0.075, 0.12, (vx + s * 0.31, 0, PIPE_Z), ALONG_X, verts=32,
+                        round_edges=0.005) for s in (-1, 1)]
+    vparts.append(cylinder(f"{name}_stem", BRASS, 0.032, 0.14, (vx, 0, PIPE_Z + 0.19), verts=24))
+    vparts.append(hexagon(f"{name}_gland", BRASS, 0.06, 0.05, (vx, 0, PIPE_Z + 0.15)))
+    join(name, valve, *vparts)
+
+    # Lever across the pipe (closed). Its origin is on the stem, so a quarter turn opens it.
+    lever_z = PIPE_Z + 0.27
+    lever = box(f"{name}_Handle", STEEL, (0.07, 0.16, 0.022), (vx, -0.06, lever_z), round_edges=0.006)
+    grip = box(f"{name}_grip", VINYL_RED, (0.085, 0.36, 0.04), (vx, -0.3, lever_z), round_edges=0.016)
+    nut = hexagon(f"{name}_nut", STEEL, 0.045, 0.03, (vx, 0, lever_z + 0.025))
+    join(f"{name}_Handle", lever, grip, nut)
+    origin_to(lever, (vx, 0, lever_z))
+
+
+ball_valve("Valve_A", NODE_X[3])
+ball_valve("Valve_B", NODE_X[5])
 
 # ---- Clear tubing between the parts, with hose clamps and supports ---------------------------
+SENSOR_HALF, VALVE_HALF = 0.32, 0.37    # from a part's centre to the end of its spigot
 ports = [
     (source_port, px - 0.42),
-    (px + 0.42, NODE_X[2] - 0.32),
-    (NODE_X[2] + 0.32, vx - 0.37),
-    (vx + 0.37, NODE_X[4] - 0.32),
-    (NODE_X[4] + 0.32, delivery_port),
+    (px + 0.42, NODE_X[2] - SENSOR_HALF),
+    (NODE_X[2] + SENSOR_HALF, NODE_X[3] - VALVE_HALF),
+    (NODE_X[3] + VALVE_HALF, NODE_X[4] - SENSOR_HALF),
+    (NODE_X[4] + SENSOR_HALF, NODE_X[5] - VALVE_HALF),
+    (NODE_X[5] + VALVE_HALF, NODE_X[6] - SENSOR_HALF),
+    (NODE_X[6] + SENSOR_HALF, delivery_port),
 ]
 clamps, supports = [], []
 for i, (a, b) in enumerate(ports):

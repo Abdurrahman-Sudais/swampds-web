@@ -49,7 +49,7 @@ export default function Login() {
               Real-time pipeline<br />monitoring &amp; control
             </h2>
             <p className="text-slate-400 text-sm mt-3 leading-relaxed">
-              Monitor two inline flow sensors and the tank level, and detect leaks between them automatically.
+              Monitor three inline flow sensors and the tank level, and detect leaks between them automatically.
               Control the pump remotely in auto or manual mode.
             </p>
           </div>
@@ -58,9 +58,9 @@ export default function Login() {
           <div className="space-y-3">
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest">System States</p>
             {[
-              { color: 'bg-green-500',  label: 'Normal',  desc: 'Both flow sensors agree' },
+              { color: 'bg-green-500',  label: 'Normal',  desc: 'All three flow sensors agree' },
               { color: 'bg-amber-500',  label: 'Warning', desc: 'Flow difference or pump issue' },
-              { color: 'bg-orange-500', label: 'Leak',    desc: 'Sensor 2 below Sensor 1 - leak confirmed' },
+              { color: 'bg-orange-500', label: 'Leak',    desc: 'Flow drops between sensors - leak confirmed' },
               { color: 'bg-red-600',    label: 'Fault',   desc: 'Sensor fault - shutoff active' },
             ].map(({ color, label, desc }) => (
               <div key={label} className="flex items-center gap-3">

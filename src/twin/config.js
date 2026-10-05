@@ -2,7 +2,7 @@
  * @fileoverview Digital-twin configuration.
  *
  * The leak rule and pump thresholds mirror the prototype firmware
- * (swampds_prototype_2flow.ino). Change them in both places together.
+ * (swampds_prototype_3flow.ino). Change them in both places together.
  */
 
 /**
@@ -10,7 +10,7 @@
  * standalone simulation only: no auto-connect on the twin page, no background twin on the dashboard,
  * and the Connect button refuses. The prototype then runs on its own (see TWIN_LINK_ENABLED in the firmware).
  */
-export const TWIN_LINK_ENABLED = false;
+export const TWIN_LINK_ENABLED = true;
 
 // Delivery tank geometry on the prototype, in cm (same names and values as the firmware).
 // The ultrasonic sensor sits inside the tank, so the highest level it can safely measure is
@@ -62,11 +62,11 @@ export const DEFAULT_CONFIG = {
 
   // Sensors
   noisePct: 1.5,           // random reading noise, +/- percent
-  sensorBiasPct: [0, 0.8], // fixed per-sensor calibration error (F1, F2)
+  sensorBiasPct: [0, 0.8, -0.8], // fixed per-sensor calibration error (F1, F2, F3)
   minFlowLpm: 0.5,         // below this upstream flow a segment is not evaluated
 
   // Leak detection (compare-and-persist) - firmware TOLERANCE_PCT / PERSIST_SEC
-  tolerancePct: 20,        // % of F1's flow missing at F2 that is treated as abnormal
+  tolerancePct: 20,        // % of a segment's inflow missing at its outlet that is treated as abnormal
   persistSec: 10,          // abnormal difference must last this long to be a LEAK
 
   // Pump control
@@ -90,9 +90,10 @@ export function reliableLeakOpening(config) {
   return Math.min(100, Math.ceil((config.tolerancePct + NOISE_MARGIN_PCT) / config.maxLeakFraction));
 }
 
-/** Human-readable description of the monitored pipe segment (two flow sensors = one segment). */
+/** Human-readable description of each monitored pipe segment (three flow sensors = two segments). */
 export const SEGMENTS = {
   A: { valve: 'A', from: 'F1', to: 'F2', label: 'F1 → F2 (Valve A)' },
+  B: { valve: 'B', from: 'F2', to: 'F3', label: 'F2 → F3 (Valve B)' },
 };
 
 /** Everything that can be named in leakSegments: the flow segment, plus the prototype's level-rate check. */

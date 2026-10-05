@@ -1,7 +1,7 @@
 /**
  * @fileoverview SWAMPDS data layer - the only file that talks to Firebase.
  *
- * useSwampdsData()     live sensor + status + alerts snapshot (two flow sensors: flow1, flow2)
+ * useSwampdsData()     live sensor + status + alerts snapshot (three flow sensors: flow1, flow2, flow3)
  * useChartHistory()    { flowData, waterLevelData } for trend charts, built from
  *                      readings recorded here as they arrive (Firebase keeps no history)
  * sendPumpCommand(cmd) write "on" | "off" to the pump command
@@ -33,7 +33,7 @@ function _thresholds(config) {
 
 const initialData = {
   sensors: {
-    flow1: 0, flow2: 0,
+    flow1: 0, flow2: 0, flow3: 0,
     waterLevelPercent: 0, waterLevelCm: 0,
     lastUpdated: Date.now(),
   },
@@ -104,7 +104,7 @@ function _rebuild() {
   };
 
   _notify({
-    sensors: _raw.sensors ?? initialData.sensors,
+    sensors: _raw.sensors ? { ...initialData.sensors, ..._raw.sensors } : initialData.sensors,
     status:  mappedStatus,
     control: _raw.control ?? initialData.control,
     alerts,
@@ -168,7 +168,7 @@ export function thinSamples(samples, maxPoints = MAX_CHART_POINTS, stepMs = SAMP
 const _deriveCharts = (samples) => {
   const shown = thinSamples(samples).map(s => ({ ...s, time: _timeLabel(s.ts) }));
   return {
-    flowData:       shown.map(s => ({ time: s.time, F1: s.f1, F2: s.f2 })),
+    flowData:       shown.map(s => ({ time: s.time, F1: s.f1, F2: s.f2, F3: s.f3 })),
     waterLevelData: shown.map(s => ({ time: s.time, level: s.level })),
   };
 };
@@ -202,15 +202,16 @@ if (typeof window !== 'undefined') window.addEventListener('pagehide', _save);
 function _recordSample(sensors) {
   const f1 = Number(sensors.flow1);
   const f2 = Number(sensors.flow2);
+  const f3 = Number(sensors.flow3 ?? 0);   // older firmware publishes no flow3
   const level = Number(sensors.waterLevelPercent);
-  if (![f1, f2, level].every(Number.isFinite)) return;
+  if (![f1, f2, f3, level].every(Number.isFinite)) return;
 
   const now  = Date.now();
   const last = _samples[_samples.length - 1];
   if (last && now - last.ts < SAMPLE_INTERVAL_MS) return;
 
   const cutoff = now - HISTORY_WINDOW_MS;
-  _samples = [..._samples.filter(s => s.ts >= cutoff), { ts: now, f1, f2, level }];
+  _samples = [..._samples.filter(s => s.ts >= cutoff), { ts: now, f1, f2, f3, level }];
   _charts  = _deriveCharts(_samples);
   _chartListeners.forEach(fn => fn(_charts));
 

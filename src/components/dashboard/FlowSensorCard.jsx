@@ -18,9 +18,9 @@ const SPARKLINE_POINTS = 30;
  *   historyKey: string,
  *   status: {{ tone: 'ok'|'bad'|'idle', label: string }},
  * }} props
- * `status` comes from flowSensorStatus() (Sensor 2 is judged against Sensor 1).
+ * `status` comes from flowSensorStatus() (each sensor is judged against the one before it).
  * `history` is the recorded flow series from useChartHistory(); `historyKey` picks
- * this sensor's column (F1/F2).
+ * this sensor's column (F1/F2/F3).
  */
 export default function FlowSensorCard({ title, value, sublabel, color, iconColorClass, history = [], historyKey, status }) {
   const sparkData = useMemo(
