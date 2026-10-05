@@ -61,14 +61,22 @@ test('sensor noise and calibration bias alone never cause a warning or leak', ()
   }
 });
 
-test('flow is conserved: a leak reduces the downstream sensor and what reaches the tank', () => {
-  const clean = { ...CFG, noisePct: 0, sensorBiasPct: [0, 0] };
-  let s = setValve(runningPump(), 'A', 50);
+test('flow is conserved: a leak reduces every sensor downstream of it', () => {
+  const clean = { ...CFG, noisePct: 0, sensorBiasPct: [0, 0, 0] };
+  let s = setValve(setValve(runningPump(), 'A', 50), 'B', 50);
   s = step(s, clean, DT, seeded());
-  // 50% open * 0.6 max leak = 30% loss
+  // 50% open * 0.6 max leak = 30% loss per valve
   assert.ok(Math.abs(s.flows.f1 - 4.8) < 0.01);
   assert.ok(Math.abs(s.flows.f2 - 4.8 * 0.7) < 0.01);
-  assert.deepEqual(Object.keys(s.flows), ['f1', 'f2'], 'two flow sensors');
+  assert.ok(Math.abs(s.flows.f3 - 4.8 * 0.7 * 0.7) < 0.01);
+});
+
+test('a leak at Valve A lowers F2 and F3 alike, so segment B stays healthy', () => {
+  const clean = { ...CFG, noisePct: 0, sensorBiasPct: [0, 0, 0] };
+  const s = run(setValve(runningPump(), 'A', 100), 3, clean);
+  assert.ok(Math.abs(s.flows.f2 - s.flows.f3) < 0.01);
+  assert.ok(s.segments.A.abnormalFor > 0);
+  assert.equal(s.segments.B.abnormalFor, 0);
 });
 
 test('a leak is declared only after the difference persists past the threshold duration', () => {
@@ -96,9 +104,14 @@ test('a brief spike shorter than the persistence window does not declare a leak'
   assert.ok(s.events.some((e) => e.message.includes('no leak declared')));
 });
 
-test('a confirmed leak is reported on segment A (F1 -> F2), the only monitored segment', () => {
-  const { state } = runUntil(setValve(runningPump(), 'A', 100), (x) => x.latched);
-  assert.deepEqual(state.leakSegments, ['A']);
+test('the affected segment is identified: A, B, or both', () => {
+  const detect = (a, b) => {
+    const s0 = setValve(setValve(runningPump(), 'A', a), 'B', b);
+    return runUntil(s0, (x) => x.latched).state.leakSegments;
+  };
+  assert.deepEqual(detect(100, 0), ['A']);
+  assert.deepEqual(detect(0, 100), ['B']);
+  assert.deepEqual(detect(100, 100), ['A', 'B']);
 });
 
 test('confirmed leak cuts the pump in the same tick and every output agrees', () => {
@@ -129,17 +142,20 @@ test('leak protection overrides manual mode', () => {
   let s = setManualCommand(setMode(runningPump(), 'manual'), 'on');
   s = run(s, 2);
   assert.equal(s.pumpOn, true);
-  const { state } = runUntil(setValve(s, 'A', 100), (x) => x.latched);
+  const { state } = runUntil(setValve(s, 'B', 100), (x) => x.latched);
   assert.equal(state.pumpOn, false);
-  assert.deepEqual(state.leakSegments, ['A']);
+  assert.deepEqual(state.leakSegments, ['B']);
 });
 
-test('reset is refused while the valve is open, and works once it is closed', () => {
+test('reset is refused while a valve is open, and works once both are closed', () => {
   let { state: s } = runUntil(setValve(runningPump(), 'A', 100), (x) => x.latched);
 
   const refused = acknowledgeReset(s);
   assert.equal(refused.ok, false);
   assert.equal(refused.state.latched, true);
+
+  const otherOpen = acknowledgeReset(setValve(setValve(refused.state, 'A', 0), 'B', 10));
+  assert.equal(otherOpen.ok, false, 'Valve B still open');
 
   const closed = setValve(refused.state, 'A', 0);
   const accepted = acknowledgeReset(closed);
@@ -242,11 +258,13 @@ test('reliableLeakOpening is the smallest opening the detector really catches', 
 
 test('every leak preset opens a valve far enough to be detected with default settings', () => {
   for (const preset of DEMO_PRESETS.filter((p) => p.id !== 'normal')) {
-    const opened = { A: 0 };
+    const opened = { A: 0, B: 0 };
     preset.apply({ setValve: (id, v) => { opened[id] = v; }, setMode() {}, refillSource() {} });
+    const open = Object.values(opened).filter((v) => v > 0);
+    assert.ok(open.length > 0, `${preset.id} opens no valve`);
     assert.ok(
-      opened.A >= reliableLeakOpening(CFG),
-      `${preset.id} opens only ${JSON.stringify(opened)}`,
+      open.every((v) => v >= reliableLeakOpening(CFG)),
+      `${preset.id} opens ${JSON.stringify(opened)}; every open valve must be detectable`,
     );
   }
 });

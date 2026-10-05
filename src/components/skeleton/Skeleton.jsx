@@ -97,8 +97,9 @@ export const TableRowsSkeleton = ({ rows = 5, cols = 4 }) => (
 const DashboardSkeleton = () => (
   <div className="space-y-6">
     <Banner />
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 sm:gap-6">
       {[0, 1, 2, 3].map(i => <StatCard key={i} />)}
+      <StatCard className="sm:col-span-2 lg:col-span-1" />
     </div>
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
       <div className="lg:col-span-2 space-y-4 sm:space-y-6">
@@ -124,6 +125,7 @@ const WaterLevelSkeleton = () => (
 const FlowSensorsSkeleton = () => (
   <div className="space-y-6">
     <Banner />
+    <Chart className="h-44 sm:h-48" />
     <Chart className="h-44 sm:h-48" />
     <Chart className="h-44 sm:h-48" />
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">

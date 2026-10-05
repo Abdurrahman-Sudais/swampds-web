@@ -30,9 +30,10 @@ export default function LiveStrip({ sim }) {
       aria-label="Live readings"
       className={`lg:hidden sticky top-14 z-30 -mx-4 sm:-mx-6 px-4 sm:px-6 py-2 border-y backdrop-blur-md transition-colors ${TONE[status] ?? TONE.normal}`}
     >
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-4 gap-2">
         <Cell label="F1 L/min" value={flows.f1.toFixed(2)} />
         <Cell label="F2 L/min" value={flows.f2.toFixed(2)} alert={segments.A.leak} />
+        <Cell label="F3 L/min" value={flows.f3.toFixed(2)} alert={segments.B.leak} />
         <Cell label="Tank" value={Math.round(tanks.delivery)} unit="%" />
       </div>
     </div>

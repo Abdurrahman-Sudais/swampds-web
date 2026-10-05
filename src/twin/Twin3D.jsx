@@ -17,8 +17,9 @@ const BASE = import.meta.env.BASE_URL;
 const MODEL_URL = `${BASE}models/swampds.glb`;
 const DRACO_URL = `${BASE}draco/`;
 
-// Which monitored segment each pipe run belongs to. Past F2 nothing is monitored.
-const PIPE_SEGMENT = [null, null, 'A', 'A', null];
+// Which monitored segment each pipe run belongs to (A: F1 -> F2, B: F2 -> F3). Past F3 nothing is monitored.
+const PIPE_SEGMENT = [null, null, 'A', 'A', 'B', 'B', null];
+const VALVES = ['A', 'B'];
 const PIPES = PIPE_SEGMENT.map((_, i) => `Pipe_${i}`);
 
 const WATER_COLOR = '#2f8fcf';
@@ -35,7 +36,8 @@ const COLORS = {
 // Camera: like an architectural photo with a shift lens. It stays level (so upright parts stay
 // upright, at any angle) at EYE_HEIGHT, and the picture is shifted down to centre the rig instead
 // of tilting the camera. Orbiting only turns it around the rig; zoom moves it closer or further.
-const SCENE_WIDTH = 15.2;    // the base board plus a margin (its front corners sit nearer the camera)
+const BOARD = [14.8, 2.6];   // base board size (BOARD_W in blender/build_twin.py)
+const SCENE_WIDTH = BOARD[0] + 2.4;   // the base board plus a margin (its front corners sit nearer the camera)
 const RIG_CENTRE_Y = 0.8;    // the height the shift centres on
 const EYE_HEIGHT = 3.4;
 const FOV = 28;
@@ -66,11 +68,12 @@ const meshesOf = (node) => {
   return out;
 };
 
-/** Which clickable part a hit mesh belongs to. */
+/** Which clickable part a hit mesh belongs to: 'pump', 'A', 'B' (a valve) or null. */
 function partOf(obj) {
   for (let o = obj; o; o = o.parent) {
     if (o.name.startsWith('Pump')) return 'pump';
-    if (o.name.startsWith('Valve_A')) return 'valve';
+    const valve = VALVES.find((id) => o.name.startsWith(`Valve_${id}`));
+    if (valve) return valve;
   }
   return null;
 }
@@ -96,13 +99,16 @@ function useModel() {
       const b = bounds(name);
       return [(b.min.x + b.max.x) / 2, b.max.y + lift, (b.min.z + b.max.z) / 2];
     };
-    const valve = bounds('Valve_A');
+    const valveBottom = (id) => {
+      const b = bounds(`Valve_${id}`);
+      return [(b.min.x + b.max.x) / 2, b.min.y, (b.min.z + b.max.z) / 2];
+    };
     return {
       root,
       water: { source: get('Water_Source'), delivery: get('Water_Delivery') },
       rotor: get('Pump_Rotor'),
       led: get('Pump_LED'),
-      handle: get('Valve_A_Handle'),
+      handles: Object.fromEntries(VALVES.map((id) => [id, get(`Valve_${id}_Handle`)])),
       pipes: PIPES.map(get),
       pipeRuns: PIPES.map((name) => {
         const b = bounds(name);
@@ -110,22 +116,24 @@ function useModel() {
       }),
       labels: {
         source: above('Tank_Source'), delivery: above('Sensor_Bracket'), pump: above('Pump_Grille'),
-        f1: above('Sensor_F1', 0.2), f2: above('Sensor_F2', 0.2), valve: above('Valve_A_Handle'),
+        f1: above('Sensor_F1', 0.2), f2: above('Sensor_F2', 0.2), f3: above('Sensor_F3', 0.2),
+        valveA: above('Valve_A_Handle'), valveB: above('Valve_B_Handle'),
       },
-      valveBottom: [(valve.min.x + valve.max.x) / 2, valve.min.y, (valve.min.z + valve.max.z) / 2],
+      valveBottoms: Object.fromEntries(VALVES.map((id) => [id, valveBottom(id)])),
       fan: { speed: 0 },
     };
   }, [scene]);
 }
 
-/** Pipe colours, the pump LED and the valve lever follow the twin's state. */
-function showState(model, { pumpOn, valveOpen, segments }) {
+/** Pipe colours, the pump LED and the valve levers follow the twin's state. */
+function showState(model, { pumpOn, openA, openB, segments }) {
   for (const m of meshesOf(model.led)) {
     m.material.emissive.copy(pumpOn ? LED_ON : LED_OFF);
     m.material.emissiveIntensity = pumpOn ? 3 : 0;
   }
   // A real ball valve: lever across the pipe is closed, along the pipe is open.
-  model.handle.rotation.y = valveOpen ? Math.PI / 2 : 0;
+  model.handles.A.rotation.y = openA ? Math.PI / 2 : 0;
+  model.handles.B.rotation.y = openB ? Math.PI / 2 : 0;
   model.pipes.forEach((pipe, i) => {
     const seg = PIPE_SEGMENT[i] && segments[PIPE_SEGMENT[i]];
     const flag = seg?.leak ? LEAK : seg?.abnormalFor > 0 ? VERIFYING : null;
@@ -276,9 +284,10 @@ function Scene({ sim, dark, onToggleValve, onTogglePump }) {
   const palette = dark ? COLORS.dark : COLORS.light;
   const { flows, tanks, valves, leakFlow, segments, pumpOn } = sim;
   const model = useModel();
-  const valveOpen = valves.A > 0;
+  const openA = valves.A > 0;
+  const openB = valves.B > 0;
 
-  useEffect(() => { showState(model, { pumpOn, valveOpen, segments }); }, [model, pumpOn, valveOpen, segments]);
+  useEffect(() => { showState(model, { pumpOn, openA, openB, segments }); }, [model, pumpOn, openA, openB, segments]);
   useFrame((_, dt) => animate(model, { tanks, pumpOn }, dt));
 
   const handleClick = (e) => {
@@ -286,14 +295,14 @@ function Scene({ sim, dark, onToggleValve, onTogglePump }) {
     if (!part) return;
     e.stopPropagation();
     if (part === 'pump') onTogglePump?.();
-    else onToggleValve?.('A', valveOpen ? 0 : 25);
+    else onToggleValve?.(part, valves[part] > 0 ? 0 : 25);
   };
   const handleHover = (e) => {
     const part = partOf(e.object);
-    document.body.style.cursor = part === 'valve' || (part === 'pump' && sim.mode === 'manual') ? 'pointer' : '';
+    document.body.style.cursor = (part && part !== 'pump') || (part === 'pump' && sim.mode === 'manual') ? 'pointer' : '';
   };
 
-  const pipeFlow = [flows.f1, flows.f1, flows.f1, flows.f2, flows.f2];
+  const pipeFlow = [flows.f1, flows.f1, flows.f1, flows.f2, flows.f2, flows.f3, flows.f3];
   const { labels } = model;
 
   return (
@@ -304,9 +313,9 @@ function Scene({ sim, dark, onToggleValve, onTogglePump }) {
       <directionalLight position={[5, 9, 7]} intensity={dark ? 0.9 : 1.2} />
 
       {/* The board's soft shadow on the (invisible, backdrop-coloured) floor */}
-      <ContactShadows position={[0, -0.178, 0]} scale={[18, 6]} far={1} blur={3} opacity={dark ? 0.7 : 0.45} resolution={512} />
+      <ContactShadows position={[0, -0.178, 0]} scale={[BOARD[0] + 5.2, 6]} far={1} blur={3} opacity={dark ? 0.7 : 0.45} resolution={512} />
       {/* Shadows of the rig on the board */}
-      <ContactShadows position={[0, 0.002, 0]} scale={[12.8, 2.6]} far={2.4} blur={2.4} opacity={0.5} resolution={1024} />
+      <ContactShadows position={[0, 0.002, 0]} scale={BOARD} far={2.4} blur={2.4} opacity={0.5} resolution={1024} />
 
       <primitive
         object={model.root}
@@ -316,15 +325,18 @@ function Scene({ sim, dark, onToggleValve, onTogglePump }) {
       />
 
       {model.pipeRuns.map((run, i) => <TubeWater key={i} run={run} flow={pipeFlow[i]} />)}
-      <Leak at={model.valveBottom} active={leakFlow.A > 0.05} />
+      {VALVES.map((id) => <Leak key={id} at={model.valveBottoms[id]} active={leakFlow[id] > 0.05} />)}
 
       <Label position={labels.source} title="Source" value={`${Math.round(tanks.source)}%`} />
       <Label position={labels.pump} title="Pump" value={pumpOn ? 'ON' : 'OFF'}
         tone={pumpOn ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500'} />
       <Label position={labels.f1} title="Sensor 1" value={`${flows.f1.toFixed(2)} L/min`} />
-      <Label position={labels.valve} title="Valve A" value={`${valves.A}%`}
-        tone={valveOpen ? 'text-amber-600 dark:text-amber-400' : 'text-slate-500'} />
+      <Label position={labels.valveA} title="Valve A" value={`${valves.A}%`}
+        tone={openA ? 'text-amber-600 dark:text-amber-400' : 'text-slate-500'} />
       <Label position={labels.f2} title="Sensor 2" value={`${flows.f2.toFixed(2)} L/min`} />
+      <Label position={labels.valveB} title="Valve B" value={`${valves.B}%`}
+        tone={openB ? 'text-amber-600 dark:text-amber-400' : 'text-slate-500'} />
+      <Label position={labels.f3} title="Sensor 3" value={`${flows.f3.toFixed(2)} L/min`} />
       <Label position={labels.delivery} title="Delivery" value={`${Math.round(tanks.delivery)}%`} />
 
       <OrbitControls
@@ -345,7 +357,7 @@ function Scene({ sim, dark, onToggleValve, onTogglePump }) {
 
 /**
  * @param {{ sim: object, dark?: boolean, onToggleValve?: Function, onTogglePump?: Function }} props
- * Drag to orbit, scroll or pinch to zoom. Click the pump (manual mode) or the valve, as in 2D.
+ * Drag to orbit, scroll or pinch to zoom. Click the pump (manual mode) or a valve, as in 2D.
  */
 export default function Twin3D({ sim, dark = false, onToggleValve, onTogglePump }) {
   useEffect(() => () => { document.body.style.cursor = ''; }, []);

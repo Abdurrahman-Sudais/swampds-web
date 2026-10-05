@@ -3,14 +3,15 @@
  * dashboard. Pure functions only (no Firebase, no React) so it is easy to test.
  *
  * WHAT THE TWIN PUBLISHES (acting as the device):
- *   sensors/flow1, flow2, waterLevelPercent, waterLevelCm, lastUpdated   (ms epoch)
+ *   sensors/flow1, flow2, flow3, waterLevelPercent, waterLevelCm, lastUpdated   (ms epoch)
  *   system/status      'NORMAL' | 'WARNING' | 'LEAK'
  *   system/pumpState   'ON' | 'OFF'
  *   system/pumpMode    'AUTO' | 'MANUAL'   (mirror of status/controlMode)
  *   system/pumpStartedAt  ms epoch the current pump run began (absent while the pump is off)
  *   system/source      'digital-twin'      (so the dashboard can say the data is simulated)
  *   system/online      true
- *   system/leakSegments  'A'   (absent when there is no leak; one segment, F1 -> F2)
+ *   system/leakSegments  'A' | 'B' | 'A,B' (plus ',L' / 'L' for the prototype's level-rate check;
+ *                        absent when there is no leak). A = F1 -> F2, B = F2 -> F3
  *   system/hardwareLinked  true while the delivery level comes from the prototype's sensor
  *   hil/status, hil/pump, hil/heartbeat   outputs for the prototype to mirror (hardware-in-the-loop):
  *     the ESP32 drives its LEDs, buzzer and pump relay from these while the heartbeat keeps changing.
@@ -19,7 +20,7 @@
  *   alerts/<pushId>    { time, severity, message, timestamp, source }
  *     - one is written when the twin connects to / disconnects from the dashboard
  *   pumpHistory/<pushId>  { date, start, end, duration, startTimestamp }
- *   twin/valves/A, twin/tolerancePct, twin/persistSec   (informational)
+ *   twin/valves/A|B, twin/tolerancePct, twin/persistSec   (informational)
  *   twinLock           { clientId, uid, email, since, heartbeat }   (single-publisher lock)
  *
  * WHAT THE TWIN OBEYS (written by the dashboard):
@@ -58,6 +59,7 @@ export function toSnapshot(sim, config, now, pumpStartedAt = null) {
     sensors: {
       flow1: sim.flows.f1,
       flow2: sim.flows.f2,
+      flow3: sim.flows.f3,
       waterLevelPercent: Math.round(sim.tanks.delivery),
       waterLevelCm: roundTo((sim.tanks.delivery / 100) * config.deliveryHeightCm, 1),
       lastUpdated: now,
@@ -79,7 +81,7 @@ export function toSnapshot(sim, config, now, pumpStartedAt = null) {
       reset: sim.resets,
     },
     twin: {
-      valves: { A: sim.valves.A },
+      valves: { A: sim.valves.A, B: sim.valves.B },
       tolerancePct: config.tolerancePct,
       persistSec: config.persistSec,
     },

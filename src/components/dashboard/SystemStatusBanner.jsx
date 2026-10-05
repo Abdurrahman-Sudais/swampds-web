@@ -29,7 +29,7 @@ const STATUS_CONFIG = {
     badgeBg:  'bg-orange-900/50 text-orange-100',
     Icon:     AlertTriangle,
     label:    'LEAK DETECTED',
-    desc:     'Flow Sensor 2 is reading well below Flow Sensor 1 - leak confirmed. Inspect the pipe between the two sensors.',
+    desc:     'A flow sensor is reading well below the one before it - leak confirmed. Check the alerts for the section and inspect that pipe.',
   },
   warning: {
     bg:       'bg-amber-500',

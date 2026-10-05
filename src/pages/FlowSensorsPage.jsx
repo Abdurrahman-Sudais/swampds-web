@@ -7,7 +7,7 @@ import { Activity, CheckCircle2, AlertTriangle, ShieldAlert } from 'lucide-react
 import { Card, CardHeader } from '../components/Card';
 import ChartPlaceholder, { MIN_CHART_POINTS } from '../components/dashboard/ChartPlaceholder';
 import { useSwampdsData, useChartHistory } from '../data/swampdsData';
-import { flowSensorStatus, MIN_FLOW_LPM } from '../data/flowStatus';
+import { flowSensorStatus, segmentLoss, MIN_FLOW_LPM } from '../data/flowStatus';
 
 const TONE_CLASS = { ok: 'text-green-600', bad: 'text-red-600', idle: 'text-slate-400' };
 const TONE_BADGE = { ok: 'bg-green-100 text-green-700', bad: 'bg-red-100 text-red-700', idle: 'bg-slate-100 text-slate-500' };
@@ -23,16 +23,29 @@ const SENSOR_META = [
   {
     key:      'flow2',
     dataKey:  'F2',
-    label:    'Flow Sensor 2 - Downstream',
+    label:    'Flow Sensor 2 - Midpoint',
     color:    '#f59e0b',
-    desc:     'Downstream sensor. Reading well below Sensor 1 indicates a leak in the pipe between them. Pipe past this sensor is not monitored.',
+    desc:     'Mid-pipeline sensor. Reading well below Sensor 1 indicates a leak in section A, between Sensors 1 and 2. It is also the reference for Sensor 3.',
+  },
+  {
+    key:      'flow3',
+    dataKey:  'F3',
+    label:    'Flow Sensor 3 - Outlet',
+    color:    '#a855f7',
+    desc:     'End-of-pipe sensor, before the delivery tank. Reading well below Sensor 2 indicates a leak in section B, between Sensors 2 and 3.',
   },
 ];
 
+// The two monitored pipe sections, each judged between neighbouring sensors.
+const SECTIONS = [
+  { id: 'A', up: 'flow1', down: 'flow2', label: 'section A (Sensor 1 → 2)' },
+  { id: 'B', up: 'flow2', down: 'flow3', label: 'section B (Sensor 2 → 3)' },
+];
+
 const STATUS_EXPLANATIONS = {
-  normal:  { Icon: CheckCircle2, cls: 'bg-green-50  border-green-200  text-green-800',  iconCls: 'text-green-500',  text: 'Sensor 2 is reading within tolerance of Sensor 1. No leak detected between them.' },
+  normal:  { Icon: CheckCircle2, cls: 'bg-green-50  border-green-200  text-green-800',  iconCls: 'text-green-500',  text: 'Each sensor is reading within tolerance of the one before it. No leak detected in either section.' },
   warning: { Icon: AlertTriangle, cls: 'bg-amber-50  border-amber-200  text-amber-800', iconCls: 'text-amber-500', text: 'Something needs attention - a flow difference being verified, or a pump or water-level issue. Check the alerts for the reason.' },
-  leak:    { Icon: AlertTriangle, cls: 'bg-orange-50 border-orange-200 text-orange-800', iconCls: 'text-orange-500', text: 'Sensor 2 has read well below Sensor 1 for long enough to confirm a leak in the pipe between them. Inspect immediately.' },
+  leak:    { Icon: AlertTriangle, cls: 'bg-orange-50 border-orange-200 text-orange-800', iconCls: 'text-orange-500', text: 'A sensor has read well below the one before it for long enough to confirm a leak in the pipe between them. The alerts name the section. Inspect immediately.' },
   fault:   { Icon: ShieldAlert,   cls: 'bg-red-50    border-red-200    text-red-800',    iconCls: 'text-red-500',   text: 'A sensor is reading near-zero flow (< 1.2 L/min). This indicates sensor failure or complete blockage. Manual inspection required.' },
 };
 
@@ -85,16 +98,13 @@ export default function FlowSensorsPage() {
   const statusCfg = STATUS_EXPLANATIONS[status.systemStatus] ?? STATUS_EXPLANATIONS.normal;
   const { Icon: StatusIcon, cls, iconCls, text: statusText } = statusCfg;
 
-  // Live difference between the two sensors (what the leak check looks at)
-  const f1      = Number(sensors.flow1) || 0;
-  const f2      = Number(sensors.flow2) || 0;
-  const lossLpm = f1 - f2;
-  const lossPct = f1 >= MIN_FLOW_LPM ? (lossLpm / f1) * 100 : null;
+  // Live loss across each section (what the leak check looks at)
+  const losses = SECTIONS.map((sec) => ({ ...sec, ...segmentLoss(sensors, sec.up, sec.down) }));
 
   const rules = [
-    { label: 'Leak trigger',  value: detection.tolerancePct === null ? 'Not reported yet' : `Sensor 2 more than ${detection.tolerancePct}% below Sensor 1`, color: 'text-orange-600' },
+    { label: 'Leak trigger',  value: detection.tolerancePct === null ? 'Not reported yet' : `A sensor more than ${detection.tolerancePct}% below the one before it`, color: 'text-orange-600' },
     { label: 'Must last',     value: detection.persistSec === null ? 'Not reported yet' : `${detection.persistSec} s continuously`, color: 'text-amber-600' },
-    { label: 'Checked when',  value: `Sensor 1 reads ${MIN_FLOW_LPM} L/min or more`, color: 'text-slate-600' },
+    { label: 'Checked when',  value: `The upstream sensor reads ${MIN_FLOW_LPM} L/min or more`, color: 'text-slate-600' },
   ];
 
   return (
@@ -131,7 +141,7 @@ export default function FlowSensorsPage() {
         <Card>
           <CardHeader title="Live Readings" icon={Activity} iconColorClass="text-slate-400" />
           <p className="text-xs text-slate-400 mb-4">
-            Sensor 2 is judged against Sensor 1, so no fixed flow rate is assumed.
+            Each sensor is judged against the one before it, so no fixed flow rate is assumed.
           </p>
           <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
             <table className="w-full min-w-[380px] text-sm text-left">
@@ -165,14 +175,16 @@ export default function FlowSensorsPage() {
                     </tr>
                   );
                 })}
-                <tr className="text-slate-500 border-t border-slate-100">
-                  <td className="pt-3 text-xs font-medium" colSpan={2}>
-                    Flow lost between Sensor 1 and 2
-                  </td>
-                  <td className="pt-3 font-mono font-semibold text-xs sm:text-sm" colSpan={2}>
-                    {lossLpm.toFixed(2)} L/min{lossPct !== null && ` (${lossPct.toFixed(1)}%)`}
-                  </td>
-                </tr>
+                {losses.map(({ id, label, lpm, pct }, i) => (
+                  <tr key={id} className={`text-slate-500 ${i === 0 ? 'border-t border-slate-100' : ''}`}>
+                    <td className={`${i === 0 ? 'pt-3' : 'pt-1.5'} text-xs font-medium`} colSpan={2}>
+                      Flow lost, {label}
+                    </td>
+                    <td className={`${i === 0 ? 'pt-3' : 'pt-1.5'} font-mono font-semibold text-xs sm:text-sm`} colSpan={2}>
+                      {lpm.toFixed(2)} L/min{pct !== null && ` (${pct.toFixed(1)}%)`}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -182,8 +194,9 @@ export default function FlowSensorsPage() {
         <Card>
           <CardHeader title="Leak Detection Rule" icon={Activity} iconColorClass="text-slate-400" />
           <p className="text-xs text-slate-400 mb-4">
-            A leak is declared when Sensor 2 stays below Sensor 1 by more than the tolerance for the
-            full persistence time. Only the pipe between the two sensors is monitored.
+            A leak is declared when a sensor stays below the one before it by more than the tolerance
+            for the full persistence time: Sensor 2 against Sensor 1 (section A), Sensor 3 against
+            Sensor 2 (section B). The section that fails is the one reported.
           </p>
           <div className="space-y-3">
             {rules.map(({ label, value, color }) => (

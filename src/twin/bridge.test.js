@@ -47,7 +47,7 @@ function makeTab(fake, { clientId = 'tab-A', email = 'a@team.test', clock } = {}
 const values = (obj) => Object.values(obj ?? {});
 
 test('connecting takes the lock, reports its mode, and publishes the contract', async () => {
-  const fake = createFakeDb({ sensors: { flow1: 4, flow2: 4.6 }, status: { controlMode: 'manual' } });
+  const fake = createFakeDb({ sensors: { flow1: 4, flow2: 4.6, flow3: 3 }, status: { controlMode: 'manual' } });
   const clock = { t: 5_000 };
   const tab = makeTab(fake, { clock });
   tab.advance(4);

@@ -12,8 +12,9 @@ import FlowChart           from '../components/dashboard/FlowChart';
 import AlertsPanel         from '../components/dashboard/AlertsPanel';
 
 const FLOW_SENSORS = [
-  { key: 'flow1', historyKey: 'F1', title: 'Flow Sensor 1', sublabel: 'Near pump',  color: '#10b981', iconColorClass: 'text-emerald-500' },
-  { key: 'flow2', historyKey: 'F2', title: 'Flow Sensor 2', sublabel: 'Downstream', color: '#f59e0b', iconColorClass: 'text-amber-500'   },
+  { key: 'flow1', historyKey: 'F1', title: 'Flow Sensor 1', sublabel: 'Near pump', color: '#10b981', iconColorClass: 'text-emerald-500' },
+  { key: 'flow2', historyKey: 'F2', title: 'Flow Sensor 2', sublabel: 'Midpoint',  color: '#f59e0b', iconColorClass: 'text-amber-500'   },
+  { key: 'flow3', historyKey: 'F3', title: 'Flow Sensor 3', sublabel: 'Outlet',    color: '#a855f7', iconColorClass: 'text-purple-500'  },
 ];
 
 export default function Dashboard() {
@@ -30,21 +31,23 @@ export default function Dashboard() {
       {/* 1 - Safety banner (full width) */}
       <SystemStatusBanner systemStatus={status.systemStatus} />
 
-      {/* 2 - KPI cards row: 1 col on mobile, 2 col on tablet, 4 col on desktop */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+      {/* 2 - KPI cards row: 1 col on mobile, 2 col on tablet, 5 col on desktop */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 sm:gap-6">
         <WaterLevelCard percent={sensors.waterLevelPercent} cm={sensors.waterLevelCm} active={status.pumpStatus === 'on'} />
 
         {FLOW_SENSORS.map(({ key, ...props }) => (
           <FlowSensorCard key={key} value={sensors[key]} history={flowData} status={flowSensorStatus(key, sensors, detection)} {...props} />
         ))}
 
-        <PumpControlCard
-          pumpStatus={status.pumpStatus}
-          controlMode={status.controlMode}
-          onToggleMode={handleToggleMode}
-          onPumpCommand={handlePumpCommand}
-          readOnly={!canEdit}
-        />
+        <div className="sm:col-span-2 lg:col-span-1">
+          <PumpControlCard
+            pumpStatus={status.pumpStatus}
+            controlMode={status.controlMode}
+            onToggleMode={handleToggleMode}
+            onPumpCommand={handlePumpCommand}
+            readOnly={!canEdit}
+          />
+        </div>
       </div>
 
       {/* 3 - Charts + alerts row: 1 col on mobile & tablet, charts stacked + alerts aside on desktop */}

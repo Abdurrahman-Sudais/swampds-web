@@ -38,14 +38,21 @@ test('snapshot reports a real pump-start time while the pump is on, and clears i
 });
 
 test('snapshot reports a leak with its segments', () => {
-  let s = setValve(run(createInitialState(), 3), 'A', 100);
+  let s = setValve(setValve(run(createInitialState(), 3), 'A', 100), 'B', 100);
   s = run(s, Math.ceil(CFG.persistSec / CFG.tickSec) + 2);
   const snap = toSnapshot(s, CFG, 1);
   assert.equal(snap.system.status, 'LEAK');
-  assert.equal(snap.system.leakSegments, 'A');
+  assert.equal(snap.system.leakSegments, 'A,B');
   assert.equal(snap.system.pumpState, 'OFF');
-  assert.deepEqual(snap.twin.valves, { A: 100 });
-  assert.equal('flow3' in snap.sensors, false, 'two sensors only - flow3 is not published');
+  assert.deepEqual(snap.twin.valves, { A: 100, B: 100 });
+});
+
+test('snapshot publishes all three flow sensors', () => {
+  const s = run(createInitialState(), 5);
+  const snap = toSnapshot(s, CFG, 1);
+  assert.equal(snap.sensors.flow1, s.flows.f1);
+  assert.equal(snap.sensors.flow2, s.flows.f2);
+  assert.equal(snap.sensors.flow3, s.flows.f3);
 });
 
 test('flatten builds multi-path updates and keeps nulls (which delete)', () => {

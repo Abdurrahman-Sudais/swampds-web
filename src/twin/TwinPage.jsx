@@ -115,6 +115,7 @@ export default function TwinPage() {
         time: formatElapsed(p.t),
         F1: p.F1,
         F2: p.F2,
+        F3: p.F3,
       })),
     [sim.history],
   );
@@ -256,7 +257,7 @@ export default function TwinPage() {
                 <span className="font-semibold underline">
                   {sim.leakSegments.map((id) => LEAK_SOURCES[id].label).join(' & ')}
                 </span>
-                . {sim.leakSegments.includes('L') ? 'Fix the leak, then reset.' : 'Close the valve to reset.'}
+                . {sim.leakSegments.includes('L') ? 'Fix the leak, then reset.' : 'Close the valves to reset.'}
               </span>
             </div>
             <button
