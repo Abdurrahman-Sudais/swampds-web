@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { createBridge } from './bridge.js';
 import { setBackgroundInterval, clearBackgroundInterval } from './backgroundTimer.js';
 import { friendlyAuthError } from '../auth/authErrors.js';
+import { TWIN_LINK_ENABLED } from './config.js';
 
 const newClientId = () => globalThis.crypto?.randomUUID?.() ?? `tab-${Math.random().toString(36).slice(2)}`;
 
@@ -95,6 +96,10 @@ export function useFirebaseBridge({ sim, config, actions, auto = false }) {
   const connect = useCallback(async (options = {}) => {
     optionsRef.current = { clearPrevious: Boolean(options.clearPrevious), force: Boolean(options.force) };
     if (!options.quiet) manualOffRef.current = false;
+    if (!TWIN_LINK_ENABLED) {
+      setStatus({ state: 'error', message: 'The dashboard link is turned off for now (TWIN_LINK_ENABLED in src/twin/config.js). The twin runs as a standalone simulation.' });
+      return;
+    }
     setStatus({ state: 'loading' });
     try {
       fbRef.current ??= await loadFirebase();
@@ -134,7 +139,7 @@ export function useFirebaseBridge({ sim, config, actions, auto = false }) {
 
   // Auto-connect on load, using the sign-in already saved in this browser
   useEffect(() => {
-    if (!auto) return;
+    if (!auto || !TWIN_LINK_ENABLED) return;
     const id = setTimeout(() => connect({ force: auto === 'takeover', quiet: true }), 0);
     return () => clearTimeout(id);
   }, [auto, connect]);
