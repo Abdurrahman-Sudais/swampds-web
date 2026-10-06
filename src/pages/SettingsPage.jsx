@@ -1,11 +1,15 @@
 import React, { useState } from 'react';
-import { Settings, Info, TrendingDown, TrendingUp, Droplets, CheckCircle2, Clock } from 'lucide-react';
+import { Settings, Info, TrendingDown, TrendingUp, Droplets, CheckCircle2, Clock, BellRing, AlertTriangle } from 'lucide-react';
 import { Card, CardHeader } from '../components/Card';
 import { useSwampdsData, setPumpThresholds, resetPumpThresholds } from '../data/swampdsData';
 import { useAuth } from '../auth/AuthContext';
 import { PUMP_LIMITS, PUMP_ON_CM, PUMP_OFF_CM, FULL_SCALE_CM, validatePumpThresholds, levelPct } from '../twin/config.js';
 import TankGauge, { TankStylePicker } from '../components/TankGauge';
 import { useDashboardTankStyle } from '../components/tankStyle';
+import {
+  useNotificationPrefs, setNotificationPrefs, notificationPermission, showNotification,
+} from '../components/layout/useAlertNotifications';
+import { TEST_NOTIFICATION } from '../data/notifications';
 
 const pct = (cm) => (Number.isFinite(cm) ? `${Math.round(levelPct(cm))}%` : '-');
 
@@ -172,6 +176,130 @@ function ThresholdsCard() {
   );
 }
 
+const NOTIFY_OPTIONS = [
+  { key: 'critical', label: 'Leaks',               hint: 'Leak confirmed in section A or B, or by the level-rate check. Stays on screen until dismissed.' },
+  { key: 'warning',  label: 'Warnings',            hint: 'Pump stopped after a dry run, low water, sensor not responding, possible leak being checked.' },
+  { key: 'info',     label: 'System messages',     hint: 'Back to normal, pump levels changed, hardware or Digital Twin connected.' },
+  { key: 'offline',  label: 'Device offline',      hint: 'The device or Digital Twin stops sending data, and when it comes back.' },
+  { key: 'sound',    label: 'Sound',               hint: 'Play the system sound, plus an extra chime for leaks.' },
+];
+
+function Switch({ checked, onChange, disabled, label }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+        checked ? 'bg-blue-600' : 'bg-slate-300'
+      }`}
+    >
+      <span className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : 'translate-x-0.5'}`} />
+    </button>
+  );
+}
+
+function NotificationsCard() {
+  const prefs = useNotificationPrefs();
+  const [permission, setPermission] = useState(notificationPermission);
+  const [message, setMessage] = useState(null); // { ok: boolean, text: string }
+
+  const on = prefs.enabled && permission === 'granted';
+
+  const toggleMaster = async (want) => {
+    setMessage(null);
+    if (!want) { setNotificationPrefs({ enabled: false }); return; }
+    let result = permission;
+    if (result === 'default') {
+      result = await Notification.requestPermission();
+      setPermission(result);
+    }
+    if (result !== 'granted') {
+      setMessage({ ok: false, text: 'The browser blocked notifications for this site. Allow them in the site settings (the icon left of the address bar), then try again.' });
+      return;
+    }
+    setNotificationPrefs({ enabled: true });
+    if (!showNotification(TEST_NOTIFICATION, { sound: prefs.sound })) {
+      setMessage({ ok: false, text: 'This browser does not allow pages to show notifications (Chrome on Android needs the dashboard installed as an app). Use a desktop browser.' });
+    }
+  };
+
+  const test = () => {
+    const ok = showNotification(TEST_NOTIFICATION, { sound: prefs.sound });
+    setMessage(ok
+      ? { ok: true, text: 'Test sent. If nothing appeared, check that your system lets this browser show notifications (Windows: Settings > System > Notifications; also Focus / Do not disturb).' }
+      : { ok: false, text: 'The browser would not show the notification.' });
+  };
+
+  return (
+    <Card>
+      <CardHeader
+        title="Notifications"
+        icon={BellRing}
+        iconColorClass="text-blue-500"
+        action={
+          <Switch
+            checked={on}
+            onChange={toggleMaster}
+            disabled={permission === 'unsupported'}
+            label="Browser notifications"
+          />
+        }
+      />
+      <p className="text-xs sm:text-sm text-slate-500 mb-4 leading-relaxed">
+        Pop-up notifications on this computer whenever a new alert is raised, even while you are on another tab or app.
+        The dashboard must stay open in a browser tab. Saved in this browser only.
+      </p>
+
+      {permission === 'unsupported' && (
+        <div className="flex items-start gap-2 p-3 mb-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs sm:text-sm">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <span>This browser does not support notifications.</span>
+        </div>
+      )}
+      {permission === 'denied' && (
+        <div className="flex items-start gap-2 p-3 mb-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs sm:text-sm">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <span>Notifications are blocked for this site. Allow them in the browser's site settings, then reload this page.</span>
+        </div>
+      )}
+
+      <div className={`divide-y divide-slate-100 ${on ? '' : 'opacity-50'}`}>
+        {NOTIFY_OPTIONS.map(({ key, label, hint }) => (
+          <div key={key} className="flex items-start justify-between gap-4 py-3">
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-slate-700">{label}</div>
+              <p className="text-xs text-slate-500 mt-0.5 leading-snug">{hint}</p>
+            </div>
+            <Switch
+              checked={prefs[key]}
+              onChange={(v) => setNotificationPrefs({ [key]: v })}
+              disabled={!on}
+              label={label}
+            />
+          </div>
+        ))}
+      </div>
+
+      {on && (
+        <button
+          type="button"
+          onClick={test}
+          className="mt-4 px-4 py-2 min-h-[40px] rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-sm font-medium"
+        >
+          Send test notification
+        </button>
+      )}
+      {message && (
+        <p className={`mt-3 text-xs font-medium ${message.ok ? 'text-green-700' : 'text-red-600'}`}>{message.text}</p>
+      )}
+    </Card>
+  );
+}
+
 export default function SettingsPage() {
   const [tankStyle, setTankStyle] = useDashboardTankStyle();
 
@@ -188,6 +316,8 @@ export default function SettingsPage() {
           <TankStylePicker value={tankStyle} onChange={setTankStyle} />
         </div>
       </Card>
+
+      <NotificationsCard />
 
       <ThresholdsCard />
 

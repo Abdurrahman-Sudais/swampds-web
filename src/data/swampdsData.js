@@ -47,6 +47,7 @@ const initialData = {
   // What the ESP32 reports it is actually using (hardware/pumpOnCm, pumpOffCm); null without hardware
   deviceThresholds: null,
   loaded:  false, // true once the first real Firebase snapshot has arrived
+  alertsLoaded: false, // true once the alert list itself has arrived (empty or not)
   // Where the data comes from. `receivedAt` is the LOCAL time the heartbeat (sensors/lastUpdated)
   // last changed, so staleness does not depend on the publisher's clock being right.
   meta:    { source: null, online: null, hardwareLinked: false, lastUpdated: null, receivedAt: null },
@@ -117,6 +118,7 @@ function _rebuild() {
       ? { lowCm: _raw.hardware.pumpOnCm, fullCm: _raw.hardware.pumpOffCm }
       : null,
     loaded: _seen.size > 0,
+    alertsLoaded: _seen.has('alerts'),
     meta,
   });
 }

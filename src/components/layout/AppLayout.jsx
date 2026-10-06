@@ -16,6 +16,7 @@ import DataSourceBanner from './DataSourceBanner';
 import { useSwampdsData } from '../../data/swampdsData';
 import { useAuth } from '../../auth/AuthContext';
 import { useUnreadAlerts } from './useUnreadAlerts';
+import { useAlertNotifications } from './useAlertNotifications';
 import { PageSkeleton } from '../skeleton/Skeleton';
 import BackgroundTwin from '../../twin/BackgroundTwin';
 import { TWIN_LINK_ENABLED } from '../../twin/config.js';
@@ -51,7 +52,7 @@ const ROUTE_TITLES = {
  */
 export default function AppLayout() {
   const { pathname } = useLocation();
-  const { alerts, status, loaded, meta } = useSwampdsData();
+  const { alerts, alertsLoaded, loaded, meta } = useSwampdsData();
   const { user, canEdit } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { unreadCount, markSeen } = useUnreadAlerts(alerts, user?.uid);
@@ -75,81 +76,8 @@ export default function AppLayout() {
     setSidebarOpen(false);
   }, [pathname]);
 
-  // Request browser notification permission on mount
-  useEffect(() => {
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission();
-    }
-  }, []);
-
-  // Fire a browser notification when systemStatus worsens
-  const prevStatusRef = React.useRef(null);
-  useEffect(() => {
-    // Wait for the first real Firebase snapshot - the placeholder 'normal' state
-    // would otherwise look like a change and fire a false notification on load
-    if (!loaded) return;
-
-    const current = status?.systemStatus;
-    const prev    = prevStatusRef.current;
-
-    // First real snapshot: record it as the baseline, don't notify
-    if (prev === null) {
-      prevStatusRef.current = current;
-      return;
-    }
-
-    if (current !== prev) {
-      prevStatusRef.current = current;
-
-      if ('Notification' in window && Notification.permission === 'granted') {
-        const messages = {
-          warning: { title: 'SWAMPDS - Warning',       body: 'The system needs attention. Check the alerts.' },
-          leak:    { title: 'SWAMPDS - Leak Detected', body: 'Leak confirmed in the pipeline. Check the alerts for the section and inspect it immediately.' },
-          fault:   { title: 'SWAMPDS - Sensor Fault',  body: 'A flow sensor is reading near zero. Manual inspection required.' },
-          normal:  { title: 'SWAMPDS - All Clear',     body: 'System has returned to normal operation.' },
-        };
-        const msg = messages[current];
-        if (msg) {
-          new Notification(msg.title, {
-            body: msg.body,
-            icon: '/favicon.svg',
-            tag:  'swampds-status', // replaces previous notification instead of stacking
-          });
-        }
-      }
-    }
-  }, [loaded, status?.systemStatus]);
-
-  // Fire a browser notification when the Digital Twin connects to / disconnects from the
-  // dashboard - the "Simulated data" banner is easy to miss if you're not looking at the page.
-  const prevTwinRef = React.useRef(null);
-  useEffect(() => {
-    if (!loaded) return;
-
-    const connected = meta?.source === 'digital-twin' && meta?.online === true;
-    const prev = prevTwinRef.current;
-
-    // First real snapshot: record it as the baseline, don't notify
-    if (prev === null) {
-      prevTwinRef.current = connected;
-      return;
-    }
-
-    if (connected !== prev) {
-      prevTwinRef.current = connected;
-
-      if ('Notification' in window && Notification.permission === 'granted') {
-        const msg = connected
-          ? { title: 'SWAMPDS - Digital Twin Connected', body: 'This dashboard is now showing simulated data from the Digital Twin.' }
-          : { title: 'SWAMPDS - Digital Twin Disconnected', body: 'The Digital Twin has stopped publishing. Data may be stale.' };
-        new Notification(msg.title, {
-          body: msg.body,
-          icon: '/favicon.svg',
-          tag:  'swampds-twin', // replaces previous notification instead of stacking
-        });
-      }
-    }
-  }, [loaded, meta?.source, meta?.online]);
+  // Browser notifications for new alerts and the device going offline (switched on in Settings)
+  useAlertNotifications({ alerts, alertsLoaded, loaded, meta });
 
   const pageTitle  = ROUTE_TITLES[pathname] ?? 'SWAMPDS';
 
